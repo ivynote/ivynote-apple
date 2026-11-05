@@ -127,7 +127,7 @@ struct ShelfView: View {
                         .selectionDisabled(row.kind != .note)
                         .contextMenu { menu(for: row) }
                         .swipeActions(edge: .trailing) { swipes(for: row) }
-                        .listRowInsets(EdgeInsets(top: row.gap ? 14 : 0, leading: 10, bottom: 0, trailing: 12))
+                        .listRowInsets(EdgeInsets(top: row.gap ? ShelfMetrics.gap : 0, leading: 10, bottom: 0, trailing: 12))
                         .listRowSeparator(.hidden)
                 }
             } else {
@@ -135,7 +135,7 @@ struct ShelfView: View {
             }
         }
         .listStyle(.sidebar)
-        .environment(\.defaultMinListRowHeight, 34)
+        .environment(\.defaultMinListRowHeight, ShelfMetrics.rowHeight)
         .searchable(text: $query, placement: .sidebar, prompt: "搜索笔记")
         .navigationTitle("常青笔记")
         .toolbar {
@@ -208,11 +208,18 @@ struct ShelfView: View {
         }
     }
 
-    /// Notes are selected by the list itself (on iPhone that opens the note);
-    /// every other row is a button that opens or closes its branch.
+    /// On the Mac notes are selected by the list itself, so arrow keys and
+    /// highlighting work as in Finder. On iPhone and iPad every row is a
+    /// full-width button: a list's own selection there competes with the
+    /// buttons beside it, and a tap on a note could be lost.
     @ViewBuilder private func rowView(_ row: Shelf.Row) -> some View {
         let label = ShelfRowView(row: row, sortBy: $sortBy, onNewFolder: { startNewFolder(parent: "") }, onNewNote: newNote)
-        if row.kind == .note || row.kind == .heading {
+        #if os(macOS)
+        let plain = row.kind == .note || row.kind == .heading
+        #else
+        let plain = row.kind == .heading
+        #endif
+        if plain {
             label
         } else {
             Button { tap(row) } label: { label.contentShape(Rectangle()) }
@@ -233,6 +240,9 @@ struct ShelfView: View {
             startNewFolder(parent: "")
         case .note:
             selection = row.key
+            #if os(iOS)
+            UISelectionFeedbackGenerator().selectionChanged()
+            #endif
         case .heading:
             break
         }
@@ -293,6 +303,31 @@ struct ShelfView: View {
     }
 }
 
+/// Row sizes: compact on the Mac, finger-sized (44pt, Apple's minimum
+/// target) on iPhone and iPad.
+enum ShelfMetrics {
+    #if os(iOS)
+    static let rowHeight: CGFloat = 44
+    static let gap: CGFloat = 18
+    static let font = Font.body
+    static let chevron = Font.footnote.weight(.semibold)
+    static let chevronWidth: CGFloat = 16
+    static let iconWidth: CGFloat = 24
+    /// Narrow screens: deep branches indent less so titles keep their room.
+    static func indent(_ depth: Int) -> CGFloat {
+        CGFloat(min(depth, 4)) * 18 + CGFloat(max(depth - 4, 0)) * 8
+    }
+    #else
+    static let rowHeight: CGFloat = 34
+    static let gap: CGFloat = 14
+    static let font = Font.body
+    static let chevron = Font.caption2.weight(.semibold)
+    static let chevronWidth: CGFloat = 12
+    static let iconWidth: CGFloat = 20
+    static func indent(_ depth: Int) -> CGFloat { CGFloat(depth) * 16 }
+    #endif
+}
+
 struct ShelfRowView: View {
     let row: Shelf.Row
     @Binding var sortBy: Shelf.SortBy
@@ -313,7 +348,8 @@ struct ShelfRowView: View {
                     Button("新建笔记", systemImage: "square.and.pencil") { onNewNote("") }
                     Button("新建笔记本", systemImage: "folder.badge.plus", action: onNewFolder)
                 } label: {
-                    Image(systemName: "ellipsis").frame(width: 28, height: 24)
+                    Image(systemName: "ellipsis").frame(width: ShelfMetrics.rowHeight, height: ShelfMetrics.rowHeight)
+                        .contentShape(Rectangle())
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
@@ -332,15 +368,16 @@ struct ShelfRowView: View {
             HStack(spacing: 6) {
                 indent
                 Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
+                    .font(ShelfMetrics.chevron)
                     .foregroundStyle(.tertiary)
                     .rotationEffect(.degrees(row.open ? 90 : 0))
-                    .frame(width: 12)
+                    .frame(width: ShelfMetrics.chevronWidth)
                     .opacity(row.expandable ? 1 : 0)
                 Image(systemName: icon)
                     .foregroundStyle(row.kind == .note ? Color.secondary : Color.accentColor)
-                    .frame(width: 20)
+                    .frame(width: ShelfMetrics.iconWidth)
                 Text(title)
+                    .font(ShelfMetrics.font)
                     .lineLimit(1)
                     .foregroundStyle(row.kind == .note && row.label.isEmpty ? .secondary : .primary)
                 Spacer(minLength: 4)
@@ -350,12 +387,19 @@ struct ShelfRowView: View {
                 if row.count > 0 {
                     Text("\(row.count)").font(.footnote).monospacedDigit().foregroundStyle(.secondary)
                 }
+                #if os(iOS)
+                if row.kind == .note {
+                    Image(systemName: "chevron.forward").font(.caption.weight(.semibold)).foregroundStyle(.quaternary)
+                }
+                #endif
             }
+            .frame(minHeight: ShelfMetrics.rowHeight)
+            .contentShape(Rectangle())
         }
     }
 
     private var indent: some View {
-        Color.clear.frame(width: CGFloat(row.depth) * 16, height: 1)
+        Color.clear.frame(width: ShelfMetrics.indent(row.depth), height: 1)
     }
 
     private var title: String {

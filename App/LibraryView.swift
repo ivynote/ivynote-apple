@@ -141,18 +141,23 @@ struct ShelfView: View {
         .environment(\.defaultMinListRowHeight, ShelfMetrics.rowHeight)
         .searchable(text: $query, placement: .sidebar, prompt: "搜索笔记")
         .toolbar {
-            ToolbarItem(placement: .navigation) { LibrarySwitcher(showAccount: $showAccount) }
             ToolbarItem(placement: .primaryAction) {
                 Button("新建笔记", systemImage: "square.and.pencil") { newNote(in: "") }
                     .keyboardShortcut("n", modifiers: .command)
             }
         }
         .safeAreaInset(edge: .bottom) {
-            SyncStatusView()
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.bar)
+            // Which library this is and how its sync stands; switching is
+            // rare, so it lives down here rather than in the toolbar.
+            VStack(alignment: .leading, spacing: 4) {
+                LibrarySwitcher(showAccount: $showAccount)
+                SyncStatusView().padding(.leading, 2)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.bar)
+            .overlay(alignment: .top) { Divider() }
         }
         .refreshable { await engine.sync() }
         .alert("新建笔记本", isPresented: Binding(get: { newFolderParent != nil }, set: { if !$0 { newFolderParent = nil } })) {
@@ -537,8 +542,9 @@ struct MoveToFolderMenu: View {
 
 // MARK: Sync status
 
-/// Switches between the libraries on this device; also opens the account of
-/// a synced library and the library list.
+/// The open library at the foot of the shelf: a menu that switches between
+/// the libraries on this device, opens a synced library's account, or the
+/// library list.
 struct LibrarySwitcher: View {
     @Environment(LibraryCatalog.self) private var catalog
     @Environment(Library.self) private var library
@@ -566,8 +572,19 @@ struct LibrarySwitcher: View {
                 Button("管理笔记库…", systemImage: "books.vertical") { catalog.open(nil) }
             }
         } label: {
-            Label("笔记库", systemImage: "books.vertical")
+            HStack(spacing: 8) {
+                LibraryIcon(ref: library.ref, size: 24)
+                Text(library.ref.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
         }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("切换笔记库")
+        .accessibilityLabel("笔记库：\(library.ref.name)")
     }
 }
 
@@ -579,7 +596,6 @@ struct SyncStatusView: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 if engine.isLocal {
-                    Image(systemName: "internaldrive")
                     Text("本地笔记库 · 仅保存在本机")
                 } else {
                 switch s.status {

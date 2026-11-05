@@ -21,6 +21,11 @@ struct LibraryView: View {
         NavigationSplitView {
             ShelfView(selection: $selection, expanded: $expanded, showAccount: $showAccount, reveal: reveal)
                 .navigationTitle(library.ref.name)
+                #if os(iOS)
+                // The header row names the library; the bar stays quiet.
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1) } }
+                #endif
                 #if os(macOS)
                 .navigationSplitViewColumnWidth(min: 240, ideal: 296, max: 420)
                 #endif
@@ -123,6 +128,17 @@ struct ShelfView: View {
 
     var body: some View {
         List(selection: $selection) {
+            // The library heads the shelf: what it is, how its sync stands,
+            // and (as a menu) the way to another one.
+            Section {
+                LibraryHeader(showAccount: $showAccount)
+                    .selectionDisabled()
+                    .listRowInsets(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
+                    .listRowSeparator(.hidden)
+                    #if os(iOS)
+                    .listRowBackground(Color.clear)
+                    #endif
+            }
             if query.trimmingCharacters(in: .whitespaces).isEmpty {
                 ForEach(rows) { row in
                     rowView(row)
@@ -138,6 +154,11 @@ struct ShelfView: View {
             }
         }
         .listStyle(.sidebar)
+        #if os(iOS)
+        // The header sits snug above the tree, not a section apart.
+        .listSectionSpacing(8)
+        .contentMargins(.top, 4, for: .scrollContent)
+        #endif
         .environment(\.defaultMinListRowHeight, ShelfMetrics.rowHeight)
         .searchable(text: $query, placement: .sidebar, prompt: "搜索笔记")
         .toolbar {
@@ -145,19 +166,6 @@ struct ShelfView: View {
                 Button("新建笔记", systemImage: "square.and.pencil") { newNote(in: "") }
                     .keyboardShortcut("n", modifiers: .command)
             }
-        }
-        .safeAreaInset(edge: .bottom) {
-            // Which library this is and how its sync stands; switching is
-            // rare, so it lives down here rather than in the toolbar.
-            VStack(alignment: .leading, spacing: 4) {
-                LibrarySwitcher(showAccount: $showAccount)
-                SyncStatusView().padding(.leading, 2)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.bar)
-            .overlay(alignment: .top) { Divider() }
         }
         .refreshable { await engine.sync() }
         .alert("新建笔记本", isPresented: Binding(get: { newFolderParent != nil }, set: { if !$0 { newFolderParent = nil } })) {
@@ -542,10 +550,10 @@ struct MoveToFolderMenu: View {
 
 // MARK: Sync status
 
-/// The open library at the foot of the shelf: a menu that switches between
-/// the libraries on this device, opens a synced library's account, or the
-/// library list.
-struct LibrarySwitcher: View {
+/// The open library at the head of the shelf: its name and sync status; a
+/// tap opens a menu to switch libraries, open a synced library's account,
+/// or the library list.
+struct LibraryHeader: View {
     @Environment(LibraryCatalog.self) private var catalog
     @Environment(Library.self) private var library
     @Binding var showAccount: Bool
@@ -572,17 +580,28 @@ struct LibrarySwitcher: View {
                 Button("管理笔记库…", systemImage: "books.vertical") { catalog.open(nil) }
             }
         } label: {
-            HStack(spacing: 8) {
-                LibraryIcon(ref: library.ref, size: 24)
-                Text(library.ref.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                LibraryIcon(ref: library.ref, size: 34)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(library.ref.name)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    SyncStatusView()
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
-            .contentShape(Rectangle())
+            .padding(.horizontal, 6)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
-        .fixedSize()
         .help("切换笔记库")
         .accessibilityLabel("笔记库：\(library.ref.name)")
     }

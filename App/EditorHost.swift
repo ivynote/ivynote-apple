@@ -10,6 +10,8 @@ final class EditorHost: NSObject {
     let webView: WKWebView
     /// The editor has the keyboard (iPhone shows the formatting bar).
     private(set) var focused = false
+    /// The 0-based body line at the top of the view, for the outline.
+    private(set) var topLine = 0
 
     @ObservationIgnored private weak var engine: SyncEngine?
     @ObservationIgnored private var ready = false
@@ -55,6 +57,7 @@ final class EditorHost: NSObject {
         guard let engine else { return }
         noteID = note.id
         pageBody = note.body
+        topLine = 0
         let titles: [[String: Any]] = engine.liveNotes
             .sorted { $0.updatedAt > $1.updatedAt }
             .map { ["id": $0.id, "title": $0.title, "folder": engine.folders[$0.folderId]?.name ?? ""] }
@@ -112,6 +115,8 @@ final class EditorHost: NSObject {
             onOpenNote?(m["id"] as? String ?? "", m["title"] as? String ?? "")
         case "focus":
             focused = m["focused"] as? Bool ?? false
+        case "scroll":
+            topLine = m["line"] as? Int ?? 0
         case "error", "log":
             editorLog.notice("page \(type, privacy: .public): \(String(describing: m["message"] ?? ""), privacy: .public)")
         default:

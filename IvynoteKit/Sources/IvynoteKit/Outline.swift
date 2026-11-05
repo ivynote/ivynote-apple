@@ -31,4 +31,10 @@ public enum Outline {
         }
         return out
     }
+
+    /// The heading whose section holds `top`, the line at the top of the
+    /// view: the last one at or above it.
+    public static func current(in headings: [Heading], top: Int) -> Int? {
+        headings.last { $0.line <= top }?.line
+    }
 }

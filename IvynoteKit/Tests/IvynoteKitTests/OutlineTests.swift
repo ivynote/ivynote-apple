@@ -19,4 +19,12 @@ import Testing
     @Test func emptyBody() {
         #expect(Outline.headings(in: "").isEmpty)
     }
+
+    @Test func currentIsTheSectionAtTheTop() {
+        let hs = [Heading(level: 1, text: "A", line: 2), Heading(level: 2, text: "B", line: 10)]
+        #expect(Outline.current(in: hs, top: 0) == nil)
+        #expect(Outline.current(in: hs, top: 2) == 2)
+        #expect(Outline.current(in: hs, top: 9) == 2)
+        #expect(Outline.current(in: hs, top: 40) == 10)
+    }
 }

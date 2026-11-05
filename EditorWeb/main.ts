@@ -8,6 +8,7 @@
 //   change {id, body}  the user edited the note
 //   open {id, title}   a wiki link was followed ('' id: no such note)
 //   focus {focused}    the editor gained or lost the keyboard
+//   scroll {line}      the 0-based line at the top of the view (the outline)
 //   error {message}    an uncaught script error, for the debug log
 
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
@@ -130,6 +131,30 @@ function extensions(readonly: boolean) {
 
 const host = document.getElementById('editor')!;
 
+// The page scrolls, not CodeMirror. Report the line at the top of the
+// window, once per frame, so the outline can mark where the reader is.
+let lastTop = -1;
+let topQueued = false;
+function reportTop() {
+	topQueued = false;
+	if (!view) return;
+	// A little below the top edge: a heading just scrolled to counts as read.
+	const block = view.lineBlockAtHeight(48 - view.documentTop);
+	const line = view.state.doc.lineAt(Math.min(block.from, view.state.doc.length)).number - 1;
+	if (line === lastTop) return;
+	lastTop = line;
+	post({ type: 'scroll', line });
+}
+window.addEventListener(
+	'scroll',
+	() => {
+		if (topQueued) return;
+		topQueued = true;
+		requestAnimationFrame(reportTop);
+	},
+	{ passive: true }
+);
+
 window.ivy = {
 	/** Opens a note: a fresh state, so undo history never crosses notes. */
 	load(p: LoadPayload) {
@@ -141,6 +166,8 @@ window.ivy = {
 		else view = new EditorView({ state, parent: host });
 		view.scrollDOM.scrollTop = 0;
 		document.scrollingElement?.scrollTo(0, 0);
+		lastTop = -1;
+		reportTop();
 		if (p.focus) window.ivy.focus(true);
 	},
 

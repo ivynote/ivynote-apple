@@ -109,62 +109,181 @@ struct NoteOutline: ViewModifier {
             .inspector(isPresented: shown) {
                 // Built only while presented; not gated on `shown`, which turns
                 // false while the sheet is still sliding away.
-                OutlineView(headings: Outline.headings(in: text)) { line in
+                let headings = Outline.headings(in: text)
+                OutlineView(headings: headings, current: Outline.current(in: headings, top: host.topLine)) { line in
                     host.scrollToLine(line)
                     if compact { sheet = false }
+                } onClose: {
+                    shown.wrappedValue = false
                 }
-                .inspectorColumnWidth(min: 200, ideal: 240, max: 340)
+                .inspectorColumnWidth(min: 200, ideal: 248, max: 340)
                 .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button(shown.wrappedValue ? "隐藏大纲" : "显示大纲", systemImage: "list.bullet.indent") {
-                        shown.wrappedValue.toggle()
+                        withAnimation(.snappy) { shown.wrappedValue.toggle() }
                     }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
+                    .help(shown.wrappedValue ? "隐藏大纲 ⇧⌘O" : "显示大纲 ⇧⌘O")
                 }
             }
     }
 }
 
-/// The note's headings; a tap scrolls the editor to one (guide 3.2's 大纲).
+/// Sizes of the outline: compact on the Mac, finger-sized on iPhone and iPad.
+private enum OutlineMetrics {
+    #if os(iOS)
+    static let font: CGFloat = 15
+    static let rowPadding: CGFloat = 9
+    static let guide: CGFloat = 16
+    #else
+    static let font: CGFloat = 13
+    static let rowPadding: CGFloat = 5
+    static let guide: CGFloat = 14
+    #endif
+}
+
+/// The note's headings as a quiet table of contents: nesting drawn with thin
+/// guide lines, the section in view marked, a tap scrolls the editor there.
 struct OutlineView: View {
     let headings: [Heading]
+    /// The line of the heading whose section is in view.
+    let current: Int?
     let onPick: (Int) -> Void
+    var onClose: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // A heading of its own: a navigation title here would replace
-            // the note's in the bar.
-            Text("大纲")
-                .font(.headline)
-                .padding(.horizontal, 20)
-                .padding(.top, 18)
-                .padding(.bottom, 6)
+            header
             if headings.isEmpty {
-                ContentUnavailableView {
-                    Label("没有标题", systemImage: "list.bullet.indent")
-                } description: {
-                    Text("用 # 开头的行会出现在这里。")
-                }
+                empty
             } else {
-                List(headings) { h in
-                    Button { onPick(h.line) } label: {
-                        Text(h.text)
-                            .font(h.level == 1 ? .body.weight(.semibold) : .body)
-                            .foregroundStyle(h.level <= 2 ? .primary : .secondary)
-                            .lineLimit(2)
-                            .padding(.leading, CGFloat(min(h.level, 6) - 1) * 14)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help(h.text)
-                }
-                .listStyle(.plain)
+                list
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    // A heading of its own: a navigation title here would replace the
+    // note's in the bar.
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text("大纲")
+                .font(.system(size: OutlineMetrics.font, weight: .semibold))
+            if !headings.isEmpty {
+                Text("\(headings.count)")
+                    .font(.system(size: OutlineMetrics.font - 2).monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer()
+            if let onClose {
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: OutlineMetrics.font - 3, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("隐藏大纲")
+                .accessibilityLabel("隐藏大纲")
+            }
+        }
+        .padding(.leading, 18)
+        .padding(.trailing, 12)
+        .padding(.top, 14)
+        .padding(.bottom, 8)
+    }
+
+    private var empty: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Image(systemName: "text.alignleft")
+                .font(.system(size: 18, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text("还没有标题")
+                .font(.system(size: OutlineMetrics.font, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text("以 # 开头的行会出现在这里。")
+                .font(.system(size: OutlineMetrics.font - 1))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 8)
+    }
+
+    private var list: some View {
+        let top = headings.map(\.level).min() ?? 1
+        return ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(headings) { h in
+                        OutlineRow(heading: h, depth: min(h.level - top, 4), active: h.line == current) {
+                            onPick(h.line)
+                        }
+                        .id(h.line)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 16)
+            }
+            .onChange(of: current) { _, line in
+                guard let line else { return }
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(line, anchor: .center) }
+            }
+        }
+    }
+}
+
+private struct OutlineRow: View {
+    let heading: Heading
+    /// Levels below the outline's top level, drawn as guide lines.
+    let depth: Int
+    let active: Bool
+    let action: () -> Void
+
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 0) {
+                ForEach(0..<depth, id: \.self) { _ in
+                    Rectangle()
+                        .fill(.quaternary)
+                        .frame(width: 1)
+                        .frame(width: OutlineMetrics.guide)
+                }
+                Text(heading.text)
+                    .font(.system(size: OutlineMetrics.font, weight: depth == 0 ? .medium : .regular))
+                    .foregroundStyle(active ? AnyShapeStyle(.tint) : depth == 0 ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .padding(.vertical, OutlineMetrics.rowPadding)
+                    .padding(.leading, 10)
+                    .padding(.trailing, 8)
+                Spacer(minLength: 0)
+            }
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(active ? AnyShapeStyle(.tint.opacity(0.12)) : AnyShapeStyle(.primary.opacity(hovered ? 0.06 : 0)))
+            }
+            .overlay(alignment: .leading) {
+                // The marker of the section in view.
+                if active {
+                    Capsule()
+                        .fill(.tint)
+                        .frame(width: 3, height: 14)
+                        .padding(.leading, CGFloat(depth) * OutlineMetrics.guide + 2)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovered)
+        .animation(.easeOut(duration: 0.2), value: active)
+        .help(heading.text)
     }
 }
 

@@ -53,6 +53,7 @@ struct NoteEditorView: View {
                 Button("取消", role: .cancel) {}
                 Button("保存") { rename() }
             }
+            .modifier(NoteOutline(text: note.body))
             .toolbar {
                 if !note.isTrashed {
                     Menu("更多", systemImage: "ellipsis.circle") {
@@ -80,6 +81,90 @@ struct NoteEditorView: View {
     private func rename() {
         let v = String(titleDraft.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces).prefix(300))
         if v != engine.notes[noteID]?.title { engine.updateNote(noteID, .init(title: v)) }
+    }
+}
+
+/// The outline of a note and its toolbar switch: a column beside the note
+/// on the Mac and iPad (kept open across notes), a sheet on iPhone (closed
+/// again after each jump).
+struct NoteOutline: ViewModifier {
+    @Environment(EditorHost.self) private var host
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    let text: String
+
+    @AppStorage("ivy.outline") private var pinned = false
+    @State private var sheet = false
+
+    private var compact: Bool {
+        #if os(iOS)
+        sizeClass == .compact
+        #else
+        false
+        #endif
+    }
+
+    func body(content: Content) -> some View {
+        let shown = compact ? $sheet : $pinned
+        content
+            .inspector(isPresented: shown) {
+                // Built only while presented; not gated on `shown`, which turns
+                // false while the sheet is still sliding away.
+                OutlineView(headings: Outline.headings(in: text)) { line in
+                    host.scrollToLine(line)
+                    if compact { sheet = false }
+                }
+                .inspectorColumnWidth(min: 200, ideal: 240, max: 340)
+                .presentationDetents([.medium, .large])
+            }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(shown.wrappedValue ? "隐藏大纲" : "显示大纲", systemImage: "list.bullet.indent") {
+                        shown.wrappedValue.toggle()
+                    }
+                    .keyboardShortcut("o", modifiers: [.command, .shift])
+                }
+            }
+    }
+}
+
+/// The note's headings; a tap scrolls the editor to one (guide 3.2's 大纲).
+struct OutlineView: View {
+    let headings: [Heading]
+    let onPick: (Int) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // A heading of its own: a navigation title here would replace
+            // the note's in the bar.
+            Text("大纲")
+                .font(.headline)
+                .padding(.horizontal, 20)
+                .padding(.top, 18)
+                .padding(.bottom, 6)
+            if headings.isEmpty {
+                ContentUnavailableView {
+                    Label("没有标题", systemImage: "list.bullet.indent")
+                } description: {
+                    Text("用 # 开头的行会出现在这里。")
+                }
+            } else {
+                List(headings) { h in
+                    Button { onPick(h.line) } label: {
+                        Text(h.text)
+                            .font(h.level == 1 ? .body.weight(.semibold) : .body)
+                            .foregroundStyle(h.level <= 2 ? .primary : .secondary)
+                            .lineLimit(2)
+                            .padding(.leading, CGFloat(min(h.level, 6) - 1) * 14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(h.text)
+                }
+                .listStyle(.plain)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

@@ -81,6 +81,8 @@ final class EditorHost: NSObject {
     func setTheme(dark: Bool) { call("ivy.setTheme(dark)", ["dark": dark]) }
     func focus() { call("ivy.focus(true)", [:]) }
     func command(_ name: String) { call("ivy.command(name)", ["name": name]) }
+    /// Scrolls to a 0-based line of the body, e.g. a heading from the outline.
+    func scrollToLine(_ line: Int) { call("ivy.scrollToLine(line)", ["line": line]) }
 
     private func call(_ js: String, _ args: [String: Any]) {
         guard ready else {

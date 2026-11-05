@@ -2,7 +2,7 @@
 // (@ivynote/editor, live preview) in a WKWebView, driven over a small bridge.
 //
 // Swift → JS: window.ivy.load / setBody / setTitles / setKinds / setTheme /
-//             setReadonly / focus / command
+//             setReadonly / focus / command / scrollToLine
 // JS → Swift: webkit.messageHandlers.ivy.postMessage({ type, ... })
 //   ready              the page can take a document
 //   change {id, body}  the user edited the note
@@ -190,6 +190,14 @@ window.ivy = {
 		if (!view) return;
 		view.focus();
 		if (atEnd) view.dispatch({ selection: { anchor: view.state.doc.length }, scrollIntoView: true });
+	},
+
+	/** Jumps to a 0-based line (the outline), its heading at the top. */
+	scrollToLine(line: number, focus = false) {
+		if (!view) return;
+		const l = view.state.doc.line(Math.min(Math.max(1, line + 1), view.state.doc.lines));
+		view.dispatch({ selection: { anchor: l.from }, effects: EditorView.scrollIntoView(l.from, { y: 'start', yMargin: 24 }) });
+		if (focus) view.focus();
 	},
 
 	/** Formatting from the native toolbar. */

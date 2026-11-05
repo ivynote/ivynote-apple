@@ -1,0 +1,2 @@
+// Shared build settings. Local.xcconfig holds the per-developer Team ID.
+#include? "Local.xcconfig"

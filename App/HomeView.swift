@@ -8,7 +8,10 @@ struct HomeView: View {
     @Environment(\.openURL) private var openURL
     let account: StoredAccount
 
-    @State private var selection: String? = "all"
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    // Nothing selected on iPhone, so the app opens on the sidebar instead of
+    // pushing straight into a detail page; wide layouts preselect "all".
+    @State private var selection: String?
     @State private var confirmSignOut = false
 
     var body: some View {
@@ -44,6 +47,7 @@ struct HomeView: View {
             }
         }
         .refreshable { await session.refresh() }
+        .onAppear { if selection == nil && sizeClass != .compact { selection = "all" } }
     }
 
     private var accountView: some View {
@@ -61,15 +65,16 @@ struct HomeView: View {
                 }
             }
             Section {
+                // The dialog hangs off the button so its popover points at it.
                 Button("退出登录", role: .destructive) { confirmSignOut = true }
+                    .confirmationDialog("退出登录？", isPresented: $confirmSignOut) {
+                        Button("退出登录", role: .destructive) { Task { await session.signOut() } }
+                    } message: {
+                        Text("这台设备的登录令牌会被撤销。")
+                    }
             }
         }
         .formStyle(.grouped)
         .navigationTitle("账户")
-        .confirmationDialog("退出登录？", isPresented: $confirmSignOut) {
-            Button("退出登录", role: .destructive) { Task { await session.signOut() } }
-        } message: {
-            Text("这台设备的登录令牌会被撤销。")
-        }
     }
 }

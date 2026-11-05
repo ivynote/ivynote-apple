@@ -15,11 +15,11 @@ test:               ## IvynoteKit unit tests (no simulator needed)
 test-live:          ## Also run against a disposable server: make test-live SERVER=http://127.0.0.1:18080
 	cd IvynoteKit && IVY_TEST_SERVER=$(SERVER) swift test
 
-build-ios: project  ## Compile for the iOS Simulator (unsigned)
-	xcodebuild -project Ivynote.xcodeproj -scheme Ivynote -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+build-ios: project  ## Compile for the iOS Simulator (signed ad hoc)
+	xcodebuild -project Ivynote.xcodeproj -scheme Ivynote -destination 'generic/platform=iOS Simulator' -derivedDataPath build build
 
-build-mac: project  ## Compile for macOS (unsigned)
-	xcodebuild -project Ivynote.xcodeproj -scheme Ivynote -destination 'platform=macOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+build-mac: project  ## Compile for macOS (signed ad hoc)
+	xcodebuild -project Ivynote.xcodeproj -scheme Ivynote -destination 'platform=macOS' -derivedDataPath build build
 
 clean:
 	rm -rf build IvynoteKit/.build Ivynote.xcodeproj

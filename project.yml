@@ -58,6 +58,11 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
+        # Simulator and local Mac builds are signed ad hoc ("Sign to Run
+        # Locally") until DEVELOPMENT_TEAM is set: unsigned apps get no
+        # Keychain access (errSecMissingEntitlement).
+        "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
+        "CODE_SIGN_IDENTITY[sdk=macosx*]": "-"
         SWIFT_STRICT_CONCURRENCY: complete
 schemes:
   Ivynote:

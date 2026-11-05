@@ -240,6 +240,11 @@ struct ShelfView: View {
 
     private func tap(_ row: Shelf.Row) {
         switch row.kind {
+        case .section:
+            let key = Shelf.closedKey(row.key)
+            withAnimation(.snappy(duration: 0.2)) {
+                if expanded.contains(key) { expanded.remove(key) } else { expanded.insert(key) }
+            }
         case .group, .folder, .tag:
             guard row.expandable else { return }
             withAnimation(.snappy(duration: 0.2)) {
@@ -347,6 +352,21 @@ struct ShelfRowView: View {
 
     var body: some View {
         switch row.kind {
+        case .section:
+            // Headed like 笔记, with its count and a quiet arrow to fold it.
+            HStack(spacing: 6) {
+                Text(row.label).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                Text("\(row.count)").font(.footnote).monospacedDigit().foregroundStyle(.tertiary)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(ShelfMetrics.chevron)
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(row.open ? 90 : 0))
+                    .frame(width: ShelfMetrics.rowHeight, height: ShelfMetrics.rowHeight)
+            }
+            .padding(.top, 10)
+            .contentShape(Rectangle())
+            .accessibilityLabel(row.open ? "收起置顶" : "展开置顶")
         case .heading:
             HStack {
                 Text(row.label).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)

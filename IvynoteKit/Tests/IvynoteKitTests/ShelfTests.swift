@@ -42,10 +42,15 @@ import Testing
     @Test func pinnedTagsAndTrashGroups() {
         let tag = Tag(id: "t1", name: "idea", createdAt: 1, updatedAt: 1)
         let notes = [note("n1", "P", pinned: true, tags: ["t1"]), note("n2", "T", trashed: 9)]
-        let shut = Shelf.build(folders: [], notes: notes, tags: [tag], expanded: [], sortBy: .updated)
+        // Pinned starts open; the groups below start closed.
+        let first = Shelf.build(folders: [], notes: notes, tags: [tag], expanded: [], sortBy: .updated)
+        #expect(keys(first) == ["v:pinned", "v:pinned/n1", "h:notes", "h:create", "/n1", "v:tags", "v:trash"])
+        #expect(first[0].kind == .section && first[0].open && first[0].count == 1)
+        #expect(first[1].depth == 0)
+        #expect(first.last?.count == 1)
+        let shut = Shelf.build(folders: [], notes: notes, tags: [tag], expanded: [Shelf.closedKey("v:pinned")], sortBy: .updated)
         #expect(keys(shut) == ["v:pinned", "h:notes", "h:create", "/n1", "v:tags", "v:trash"])
-        #expect(shut.last?.count == 1)
-        let open = Shelf.build(folders: [], notes: notes, tags: [tag], expanded: ["v:pinned", "v:tags", "t:t1", "v:trash"], sortBy: .updated)
+        let open = Shelf.build(folders: [], notes: notes, tags: [tag], expanded: ["v:tags", "t:t1", "v:trash"], sortBy: .updated)
         #expect(keys(open) == ["v:pinned", "v:pinned/n1", "h:notes", "h:create", "/n1", "v:tags", "t:t1", "t:t1/n1", "v:trash", "v:trash/n2"])
     }
 

@@ -4,7 +4,7 @@ import Foundation
 /// into rows. A port of the web client's `packages/core/src/tree.ts`, so both
 /// clients show the same shelf.
 ///
-/// Order: pinned (when any), the "notes" heading, the notebook tree
+/// Order: the pinned section (when any), the "notes" heading, the notebook tree
 /// (sub-notebooks before notes), notes at the root, tags (when any), trash.
 public enum Shelf {
     /// Notes shown per branch before a "show more" row.
@@ -23,7 +23,7 @@ public enum Shelf {
     }
 
     public struct Row: Identifiable, Equatable, Sendable {
-        public enum Kind: Sendable { case group, heading, create, folder, tag, note, more }
+        public enum Kind: Sendable { case group, heading, section, create, folder, tag, note, more }
 
         /// Unique in the tree; folders and groups use it as their expansion key.
         public let key: String
@@ -50,6 +50,10 @@ public enum Shelf {
     public static let pinnedKey = "v:pinned"
     public static let tagsKey = "v:tags"
     public static let trashKey = "v:trash"
+
+    /// Sections (pinned) start open, so their key in the expansion set
+    /// records that one was closed.
+    public static func closedKey(_ key: String) -> String { key + ":closed" }
 
     public static func sortNotes(_ list: [Note], by: SortBy, trash: Bool = false) -> [Note] {
         list.sorted { a, b in
@@ -146,8 +150,15 @@ public enum Shelf {
             }
         }
 
+        // Pinned is a section of its own above the tree, headed like it and
+        // open unless closed: the notes kept at hand, without a level of nesting.
         let pinned = live.filter(\.pinned)
-        if !pinned.isEmpty { group(pinnedKey, "置顶", pinned) }
+        if !pinned.isEmpty {
+            let open = !expanded.contains(closedKey(pinnedKey))
+            rows.append(Row(key: pinnedKey, kind: .section, depth: 0, parent: "", label: "置顶", count: pinned.count,
+                            expandable: true, open: open))
+            if open { noteRows(pinned, parent: pinnedKey, depth: 0) }
+        }
 
         rows.append(Row(key: "h:notes", kind: .heading, depth: 0, parent: "", label: "笔记", count: 0,
                         expandable: false, open: false, folderID: ""))

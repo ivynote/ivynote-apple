@@ -11,6 +11,7 @@ enum SidebarItem: Hashable {
 /// Three columns on iPad and Mac (sidebar, note list, editor); a stack on iPhone.
 struct LibraryView: View {
     @Environment(SyncEngine.self) private var engine
+    @Environment(EditorHost.self) private var editor
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     @State private var sidebar: SidebarItem?
@@ -35,7 +36,20 @@ struct LibraryView: View {
                 ContentUnavailableView("未选择笔记", systemImage: "note.text")
             }
         }
-        .onAppear { if sidebar == nil && sizeClass != .compact { sidebar = .all } }
+        .onAppear {
+            if sidebar == nil && sizeClass != .compact { sidebar = .all }
+            editor.onOpenNote = { id, title in openLink(id: id, title: title) }
+            #if DEBUG
+            // `-ivyOpenNote <title>` opens a note at launch, for checking
+            // rendering without tapping through the list.
+            if let title = UserDefaults.standard.string(forKey: "ivyOpenNote"),
+               let n = engine.liveNotes.first(where: { $0.title == title }) {
+                sidebar = .all
+                // After onChange(of: sidebar) has cleared the selection.
+                Task { @MainActor in selectedNote = n.id }
+            }
+            #endif
+        }
         .onChange(of: sidebar) { selectedNote = nil }
         .sheet(isPresented: $showAccount) { AccountView() }
         .alert("内容冲突", isPresented: Binding(get: { engine.conflict != nil }, set: { if !$0 { engine.conflict = nil } }), presenting: engine.conflict) { c in
@@ -48,6 +62,22 @@ struct LibraryView: View {
         } message: { c in
             Text("「\(engine.notes[c.noteID].map(displayTitle) ?? "笔记")」在其他设备上也改动了同一处。服务器保留了它的版本，你的修改已另存为冲突副本。")
         }
+    }
+}
+
+extension LibraryView {
+    /// A followed `[[wiki link]]`. A missing note is created, like a wiki,
+    /// in the notebook of the note the link is in (guide 3.2).
+    func openLink(id: String, title: String) {
+        if !id.isEmpty, engine.notes[id] != nil {
+            selectedNote = id
+            return
+        }
+        let name = title.split(separator: "#").first.map(String.init)?.split(separator: "|").first.map(String.init)?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        guard !name.isEmpty else { return }
+        let folder = selectedNote.flatMap { engine.notes[$0]?.folderId } ?? ""
+        selectedNote = engine.createNote(title: name, folderId: folder).id
     }
 }
 

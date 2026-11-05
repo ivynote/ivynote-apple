@@ -11,14 +11,16 @@ struct SignedInView: View {
     let account: StoredAccount
 
     @State private var library: Library?
+    @State private var editor: EditorHost?
     @State private var openError: String?
 
     var body: some View {
         Group {
-            if let library {
+            if let library, let editor {
                 LibraryView()
                     .environment(library)
                     .environment(library.engine)
+                    .environment(editor)
             } else if let openError {
                 ContentUnavailableView("无法打开本地数据", systemImage: "exclamationmark.triangle", description: Text(openError))
             } else {
@@ -35,6 +37,7 @@ struct SignedInView: View {
             let lib = try Library(account: account)
             lib.engine.onUnauthorized = { [weak session] in session?.sessionRejected() }
             library = lib
+            editor = EditorHost(account: account, engine: lib.engine)
             if scenePhase == .active { lib.activate() }
         } catch {
             openError = error.localizedDescription

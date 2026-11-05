@@ -1,0 +1,40 @@
+/* What the Svelte page around the editor provides on the web. */
+:root {
+	--editor-size: 17px;
+	--gutter: 18px;
+}
+html,
+body {
+	margin: 0;
+	background: rgb(var(--surface));
+	-webkit-text-size-adjust: 100%;
+	font-family: -apple-system, 'PingFang SC', system-ui, sans-serif;
+}
+body {
+	min-height: 100vh;
+}
+#editor {
+	padding: 4px var(--gutter) 0;
+}
+.ivy-editor .cm-editor {
+	font-size: var(--editor-size);
+}
+/* The page scrolls, not CodeMirror: one scroll view feels native. */
+.ivy-editor .cm-scroller {
+	overflow: visible !important;
+}
+@media (min-width: 700px) {
+	:root {
+		--gutter: 44px;
+	}
+	#editor {
+		max-width: 760px;
+		margin: 0 auto;
+	}
+}
+/* On a phone a table is wider than the page: it scrolls sideways, and no
+   column shrinks to one character per line. */
+.ivy-editor .cm-table th,
+.ivy-editor .cm-table td {
+	min-width: 5em;
+}

@@ -1,14 +1,14 @@
 import IvynoteKit
 import SwiftUI
 
-/// Plain Markdown editing: a title field and the body as text. Every change
-/// is saved locally at once and synced in the background; there is no save
-/// button (guide 3.2). The CodeMirror live-preview editor comes later.
+/// A note: the title as a native field, the body in the web client's
+/// CodeMirror editor with live preview. Every change is saved locally at once
+/// and synced in the background; there is no save button (guide 3.2).
 struct NoteEditorView: View {
     @Environment(SyncEngine.self) private var engine
+    @Environment(EditorHost.self) private var host
+    @Environment(\.colorScheme) private var colorScheme
     let noteID: String
-
-    @FocusState private var bodyFocused: Bool
 
     var body: some View {
         if let note = engine.notes[noteID] {
@@ -27,22 +27,20 @@ struct NoteEditorView: View {
                     .font(.title2.weight(.semibold))
                     .textFieldStyle(.plain)
                     .lineLimit(1...3)
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, 18)
                     .padding(.top, 14)
-                    .padding(.bottom, 8)
-                    .onSubmit { bodyFocused = true }
+                    .padding(.bottom, 6)
+                    .onSubmit { host.focus() }
                     .disabled(note.isTrashed)
-                Divider().padding(.horizontal, 16)
-                TextEditor(text: bodyText)
-                    .font(.body)
-                    .scrollContentBackground(.hidden)
-                    .padding(.horizontal, 11)
-                    .focused($bodyFocused)
-                    .disabled(note.isTrashed)
-                    #if os(iOS)
-                    .textInputAutocapitalization(.sentences)
-                    #endif
+                MarkdownEditor(host: host)
             }
+            // The page's --surface, so the title and the body are one sheet.
+            .background(colorScheme == .dark ? Color(red: 25 / 255, green: 27 / 255, blue: 30 / 255) : .white)
+            #if os(iOS)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if host.focused && !note.isTrashed { FormatBar(host: host) }
+            }
+            #endif
             .navigationTitle(displayTitle(note))
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -61,7 +59,13 @@ struct NoteEditorView: View {
                     }
                 }
             }
-            .onAppear { if note.body.isEmpty && note.title.isEmpty && !note.isTrashed { bodyFocused = true } }
+            .onAppear {
+                host.setTheme(dark: colorScheme == .dark)
+                host.open(note, focus: note.body.isEmpty && note.title.isEmpty && !note.isTrashed)
+            }
+            .onChange(of: note.body) { _, body in host.bodyChanged(noteID, body) }
+            .onChange(of: note.isTrashed) { _, trashed in host.setReadonly(trashed) }
+            .onChange(of: colorScheme) { _, scheme in host.setTheme(dark: scheme == .dark) }
         }
     }
 
@@ -69,9 +73,50 @@ struct NoteEditorView: View {
         Binding(get: { engine.notes[noteID]?.title ?? "" },
                 set: { engine.updateNote(noteID, .init(title: String($0.replacingOccurrences(of: "\n", with: " ").prefix(300)))) })
     }
+}
 
-    private var bodyText: Binding<String> {
-        Binding(get: { engine.notes[noteID]?.body ?? "" },
-                set: { engine.updateNote(noteID, .init(body: $0)) })
+#if os(iOS)
+/// The phone's insert bar (guide 3.2): formatting the soft keyboard lacks.
+struct FormatBar: View {
+    let host: EditorHost
+
+    private let items: [(String, String, String)] = [
+        ("h1", "number", "标题"),
+        ("bold", "bold", "加粗"),
+        ("italic", "italic", "斜体"),
+        ("task", "checklist", "待办"),
+        ("list", "list.bullet", "列表"),
+        ("ordered", "list.number", "编号"),
+        ("quote", "text.quote", "引用"),
+        ("code", "chevron.left.forwardslash.chevron.right", "代码"),
+        ("wiki", "link.badge.plus", "双链"),
+        ("link", "link", "链接"),
+        ("strike", "strikethrough", "删除线"),
+    ]
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 2) {
+                    ForEach(items, id: \.0) { item in
+                        Button { host.command(item.0) } label: {
+                            Image(systemName: item.1).frame(width: 40, height: 40)
+                        }
+                        .accessibilityLabel(item.2)
+                    }
+                }
+                .padding(.horizontal, 6)
+            }
+            Divider().frame(height: 24)
+            Button { host.command("undo") } label: { Image(systemName: "arrow.uturn.backward").frame(width: 40, height: 40) }
+                .accessibilityLabel("撤销")
+            Button { host.command("blur") } label: { Image(systemName: "keyboard.chevron.compact.down").frame(width: 44, height: 40) }
+                .accessibilityLabel("收起键盘")
+        }
+        .font(.system(size: 16))
+        .tint(.primary)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
     }
 }
+#endif

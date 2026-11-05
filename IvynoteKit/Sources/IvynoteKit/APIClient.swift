@@ -95,7 +95,13 @@ public struct APIClient: Sendable {
     private struct ErrorBody: Decodable { var error: String? }
 
     func request(_ method: String, _ path: String, body: (any Encodable)?) throws -> URLRequest {
-        var req = URLRequest(url: server.apiBase.appending(path: path))
+        let parts = path.split(separator: "?", maxSplits: 1)
+        var url = server.apiBase.appending(path: String(parts[0]))
+        if parts.count == 2, var c = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            c.percentEncodedQuery = String(parts[1])
+            url = c.url ?? url
+        }
+        var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")

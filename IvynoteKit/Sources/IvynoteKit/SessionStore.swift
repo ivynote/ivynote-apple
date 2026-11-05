@@ -100,6 +100,12 @@ public final class SessionStore {
         state = .signedOut
     }
 
+    /// The server refused the token outside `refresh()`, e.g. during sync.
+    public func sessionRejected() {
+        guard account != nil else { return }
+        expire(.server(status: 401, message: ""))
+    }
+
     private func expire(_ error: APIError) {
         // The token is no longer valid. Local notes and the outbox must be
         // kept (guide 5.1): signing in again resumes syncing them.

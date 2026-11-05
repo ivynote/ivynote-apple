@@ -5,6 +5,7 @@ options:
     iOS: "17.0"
     macOS: "14.0"
   createIntermediateGroups: true
+  developmentLanguage: zh-Hans
 configFiles:
   Debug: Config.xcconfig
   Release: Config.xcconfig
@@ -30,6 +31,10 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: 常青笔记
+        # Chinese first, English second (guide 3.5); dates and system
+        # strings follow the device language among these.
+        CFBundleDevelopmentRegion: zh-Hans
+        CFBundleLocalizations: [zh-Hans, en]
         LSApplicationCategoryType: public.app-category.productivity
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}

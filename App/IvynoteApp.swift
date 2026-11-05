@@ -29,7 +29,9 @@ struct RootView: View {
             case .signedOut:
                 OnboardingView()
             case .signedIn(let account):
-                HomeView(account: account)
+                SignedInView(account: account)
+                    // A different account gets its own library.
+                    .id("\(account.server)|\(account.user.id)")
             }
         }
         .animation(.default, value: session.state)

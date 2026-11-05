@@ -21,8 +21,8 @@ issue here.
 project.yml        XcodeGen spec; Ivynote.xcodeproj is generated, not committed
 Config.xcconfig    shared settings; includes your git-ignored Local.xcconfig
 App/               SwiftUI app (iOS + macOS)
-IvynoteKit/        Swift package with no UI: API client, session, Keychain
-                   (next: local SQLite store and the sync engine)
+IvynoteKit/        Swift package with no UI: API client, session, Keychain,
+                   local SQLite store, sync engine (HLC, outbox, push/pull, SSE)
 ```
 
 IvynoteKit holds everything that can be tested without a simulator. UI code
@@ -59,8 +59,11 @@ IVY_MASTER_KEYS='k1:cUA297OzjWn7QmBrON/J1bDRS2v9NQJQUMTHFsS8Mwk=' go run . serve
 ## Roadmap
 
 1. ~~Connect, sign in, sign up, session restore~~
-2. Local store (SQLite) and sync engine: HLC, outbox, push/pull, SSE (guide ch. 6)
-3. Library tree, note list, editor (CodeMirror 6 from `ivynote/client/packages/editor` in a WKWebView)
+2. ~~Local store (SQLite) and sync engine: HLC, outbox, push/pull, SSE (guide ch. 6)~~
+   `SyncEngine` is a port of the web client's `packages/core/src/sync/engine.ts`;
+   keep the two in step when the protocol changes.
+3. ~~Library tree, note list, plain-text editor~~; next: CodeMirror 6 live preview
+   from `ivynote/client/packages/editor` in a WKWebView, tags editing
 4. Attachments, offline upload queue
 5. Search, `[[wiki links]]`, backlinks
 6. Online features: history, sharing, media library, settings

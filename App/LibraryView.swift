@@ -22,9 +22,12 @@ struct LibraryView: View {
             ShelfView(selection: $selection, expanded: $expanded, showAccount: $showAccount, reveal: reveal)
                 .navigationTitle(library.ref.name)
                 #if os(iOS)
-                // The header row names the library; the bar stays quiet.
+                // The header row names the library, so the bar stays quiet:
+                // on iPhone it is gone (it held nothing), on iPad it keeps
+                // the sidebar button.
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1) } }
+                .modifier(HideBarWhenCompact())
                 #endif
                 #if os(macOS)
                 .navigationSplitViewColumnWidth(min: 240, ideal: 296, max: 420)
@@ -548,6 +551,17 @@ struct MoveToFolderMenu: View {
 /// The open library at the head of the shelf: its name and sync status; a
 /// tap opens a menu to switch libraries, open a synced library's account,
 /// or the library list.
+/// On iPhone the header is the page's title (there is no bar above it).
+private enum HeaderMetrics {
+    #if os(iOS)
+    static let icon: CGFloat = 40
+    static let name = Font.title2.weight(.bold)
+    #else
+    static let icon: CGFloat = 34
+    static let name = Font.headline
+    #endif
+}
+
 struct LibraryHeader: View {
     @Environment(LibraryCatalog.self) private var catalog
     @Environment(Library.self) private var library
@@ -576,10 +590,10 @@ struct LibraryHeader: View {
             }
         } label: {
             HStack(spacing: 10) {
-                LibraryIcon(ref: library.ref, size: 34)
+                LibraryIcon(ref: library.ref, size: HeaderMetrics.icon)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(library.ref.name)
-                        .font(.headline)
+                        .font(HeaderMetrics.name)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     SyncStatusView()
@@ -683,3 +697,13 @@ private struct NewNoteButton: ViewModifier {
         #endif
     }
 }
+
+#if os(iOS)
+private struct HideBarWhenCompact: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    func body(content: Content) -> some View {
+        content.toolbar(sizeClass == .compact ? .hidden : .automatic, for: .navigationBar)
+    }
+}
+#endif

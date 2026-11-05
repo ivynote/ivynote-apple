@@ -1,37 +1,60 @@
 import IvynoteKit
 import SwiftUI
 
-/// Connect to a server, then sign in or sign up.
-struct OnboardingView: View {
-    @Environment(SessionStore.self) private var session
-    @State private var path: [Connected] = []
+/// Signs in to a server library: checks the server, then the sign-in form.
+struct SignInView: View {
+    @Environment(LibraryCatalog.self) private var catalog
+    let ref: LibraryRef
 
-    struct Connected: Hashable {
-        var server: ServerAddress
-        var info: ServerInfo
-
-        static func == (a: Self, b: Self) -> Bool { a.server == b.server }
-        func hash(into h: inout Hasher) { h.combine(server) }
-    }
+    @State private var info: ServerInfo?
+    @State private var error: String?
 
     var body: some View {
-        NavigationStack(path: $path) {
-            ConnectView { server, info in path = [Connected(server: server, info: info)] }
-                .navigationDestination(for: Connected.self) { c in
-                    AuthView(server: c.server, info: c.info)
+        NavigationStack {
+            Group {
+                if let server = ref.server, let info {
+                    AuthView(server: server, info: info)
+                } else if let error {
+                    ContentUnavailableView {
+                        Label("无法连接服务器", systemImage: "wifi.exclamationmark")
+                    } description: {
+                        Text(error)
+                    } actions: {
+                        Button("重试") { Task { await probe() } }
+                    }
+                } else {
+                    ProgressView()
                 }
+            }
+            .navigationTitle(ref.name)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("笔记库", systemImage: "books.vertical") { catalog.open(nil) }
+                }
+            }
         }
+        .task { await probe() }
         #if os(macOS)
         .frame(minWidth: 420, minHeight: 520)
         #endif
     }
+
+    private func probe() async {
+        guard let server = ref.server else { return }
+        error = nil
+        do { info = try await APIClient(server: server).probe() } catch { self.error = error.localizedDescription }
+    }
 }
 
+/// Connects a server as a new library: checks it, then names the library.
 struct ConnectView: View {
-    @Environment(SessionStore.self) private var session
-    var onConnected: (ServerAddress, ServerInfo) -> Void
+    var onConnected: (_ server: ServerAddress, _ info: ServerInfo, _ name: String) -> Void
 
     @State private var address = ""
+    @State private var name = ""
     @State private var checking = false
     @State private var error: String?
 
@@ -39,19 +62,6 @@ struct ConnectView: View {
 
     var body: some View {
         Form {
-            Section {
-                VStack(spacing: 8) {
-                    Image("AppLogo")
-                        .resizable()
-                        .frame(width: 72, height: 72)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    Text("常青笔记").font(.title2.weight(.semibold))
-                    Text("连接到你的常青笔记服务器").font(.subheadline).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .listRowBackground(Color.clear)
-            }
-
             Section {
                 TextField("服务器地址", text: $address, prompt: Text("https://notes.example.com"))
                     .textContentType(.URL)
@@ -61,6 +71,7 @@ struct ConnectView: View {
                     .textInputAutocapitalization(.never)
                     #endif
                     .onSubmit(connect)
+                TextField("名称（可选）", text: $name, prompt: Text("名称 · 默认使用服务器名称"))
             } footer: {
                 if let error {
                     Text(error).foregroundStyle(.red)
@@ -68,7 +79,7 @@ struct ConnectView: View {
                     Label("使用 http 连接时，密码和笔记以明文传输，请只在可信的局域网内使用。", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
                 } else {
-                    Text("常青笔记是自托管的，请填写你或管理员部署的服务器地址。")
+                    Text("常青笔记是自托管的，请填写你或管理员部署的服务器地址。接入后用该服务器的账户登录；笔记先保存在本机，联网时自动同步。")
                 }
             }
 
@@ -84,12 +95,12 @@ struct ConnectView: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("连接服务器")
+        .navigationTitle("接入服务器")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .onAppear {
-            if address.isEmpty, let last = session.lastServer { address = last.description }
+            if address.isEmpty, let last = UserDefaults.standard.string(forKey: "ivy.lastServer") { address = last }
         }
     }
 
@@ -105,8 +116,9 @@ struct ConnectView: View {
         Task {
             defer { checking = false }
             do {
-                let info = try await session.client(for: server).probe()
-                onConnected(server, info)
+                let info = try await APIClient(server: server).probe()
+                UserDefaults.standard.set(server.description, forKey: "ivy.lastServer")
+                onConnected(server, info, name)
             } catch {
                 self.error = error.localizedDescription
             }

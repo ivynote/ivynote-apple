@@ -12,8 +12,15 @@ struct AccountView: View {
     @State private var signingOut = false
 
     var body: some View {
-        let account = library.account
         NavigationStack {
+            if let account = library.account { form(account) }
+        }
+        #if os(macOS)
+        .frame(minWidth: 420, minHeight: 480)
+        #endif
+    }
+
+    private func form(_ account: StoredAccount) -> some View {
             Form {
                 Section("用户") {
                     LabeledContent("名称", value: account.user.name)
@@ -21,7 +28,7 @@ struct AccountView: View {
                     if !account.user.email.isEmpty { LabeledContent("邮箱", value: account.user.email) }
                     LabeledContent("角色", value: account.user.isAdmin ? "管理员" : "用户")
                 }
-                Section("同步") {
+                Section("同步 · \(library.ref.name)") {
                     LabeledContent("服务器", value: account.server.description)
                     LabeledContent("状态") { SyncStatusView() }
                     LabeledContent("笔记", value: "\(engine.liveNotes.count)")
@@ -43,7 +50,7 @@ struct AccountView: View {
                         Text(signOutMessage)
                     }
                 } footer: {
-                    Text("退出后，本设备上的笔记副本会被删除；服务器上的数据不受影响。")
+                    Text("退出后，本设备上这个笔记库的副本会被删除；服务器上的数据不受影响。重新登录后会再次下载。")
                 }
             }
             .formStyle(.grouped)
@@ -54,10 +61,6 @@ struct AccountView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
             }
-        }
-        #if os(macOS)
-        .frame(minWidth: 420, minHeight: 480)
-        #endif
     }
 
     private var signOutMessage: String {

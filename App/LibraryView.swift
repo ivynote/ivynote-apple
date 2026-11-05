@@ -7,6 +7,7 @@ struct LibraryView: View {
     @Environment(SyncEngine.self) private var engine
     @Environment(EditorHost.self) private var editor
     @Environment(Library.self) private var library
+    @Environment(LibraryCatalog.self) private var catalog
 
     /// The selected row's key; a note can show in several places (pinned,
     /// tags, its notebook), and each row is selected on its own.
@@ -19,6 +20,7 @@ struct LibraryView: View {
     var body: some View {
         NavigationSplitView {
             ShelfView(selection: $selection, expanded: $expanded, showAccount: $showAccount, reveal: reveal)
+                .navigationTitle(library.ref.name)
                 #if os(macOS)
                 .navigationSplitViewColumnWidth(min: 240, ideal: 296, max: 420)
                 #endif
@@ -40,7 +42,7 @@ struct LibraryView: View {
             Text("「\(engine.notes[c.noteID].map(displayTitle) ?? "笔记")」在其他设备上也改动了同一处。服务器保留了它的版本，你的修改已另存为冲突副本。")
         }
         .onAppear {
-            expanded = ShelfState.load(for: library.account)
+            expanded = ShelfState.load(for: library.ref)
             editor.onOpenNote = { id, title in openLink(id: id, title: title) }
             #if DEBUG
             // `-ivyOpenNote <title>` opens a note at launch, for checking
@@ -51,7 +53,7 @@ struct LibraryView: View {
             }
             #endif
         }
-        .onChange(of: expanded) { _, keys in ShelfState.save(keys, for: library.account) }
+        .onChange(of: expanded) { _, keys in ShelfState.save(keys, for: library.ref) }
     }
 
     /// Opens a note where it lives in the tree, expanding the path to it.
@@ -87,16 +89,17 @@ func displayTitle(_ n: Note) -> String {
     n.title.trimmingCharacters(in: .whitespaces).isEmpty ? "无标题" : n.title
 }
 
-/// Which branches are open, kept on this device per account (guide 11.2).
+/// Which branches are open, kept on this device per library (guide 11.2).
+/// Under `ivy.lib.<id>.` so removing the library removes it too.
 enum ShelfState {
-    private static func key(_ account: StoredAccount) -> String { "ivy.shelf.expanded.\(account.server)|\(account.user.id)" }
+    private static func key(_ ref: LibraryRef) -> String { "ivy.lib.\(ref.id).expanded" }
 
-    static func load(for account: StoredAccount) -> Set<String> {
-        Set(UserDefaults.standard.stringArray(forKey: key(account)) ?? [])
+    static func load(for ref: LibraryRef) -> Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: key(ref)) ?? [])
     }
 
-    static func save(_ keys: Set<String>, for account: StoredAccount) {
-        UserDefaults.standard.set(Array(keys), forKey: key(account))
+    static func save(_ keys: Set<String>, for ref: LibraryRef) {
+        UserDefaults.standard.set(Array(keys), forKey: key(ref))
     }
 }
 
@@ -137,11 +140,8 @@ struct ShelfView: View {
         .listStyle(.sidebar)
         .environment(\.defaultMinListRowHeight, ShelfMetrics.rowHeight)
         .searchable(text: $query, placement: .sidebar, prompt: "搜索笔记")
-        .navigationTitle("常青笔记")
         .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button("账户", systemImage: "person.crop.circle") { showAccount = true }
-            }
+            ToolbarItem(placement: .navigation) { LibrarySwitcher(showAccount: $showAccount) }
             ToolbarItem(placement: .primaryAction) {
                 Button("新建笔记", systemImage: "square.and.pencil") { newNote(in: "") }
                     .keyboardShortcut("n", modifiers: .command)
@@ -537,6 +537,40 @@ struct MoveToFolderMenu: View {
 
 // MARK: Sync status
 
+/// Switches between the libraries on this device; also opens the account of
+/// a synced library and the library list.
+struct LibrarySwitcher: View {
+    @Environment(LibraryCatalog.self) private var catalog
+    @Environment(Library.self) private var library
+    @Binding var showAccount: Bool
+
+    var body: some View {
+        Menu {
+            Section("笔记库") {
+                ForEach(catalog.libraries) { ref in
+                    Button {
+                        if ref.id != library.ref.id { catalog.open(ref.id) }
+                    } label: {
+                        if ref.id == library.ref.id {
+                            Label(ref.name, systemImage: "checkmark")
+                        } else {
+                            Label(ref.name, systemImage: ref.isLocal ? "internaldrive" : "icloud")
+                        }
+                    }
+                }
+            }
+            Section {
+                if !library.ref.isLocal {
+                    Button("账户与同步…", systemImage: "person.crop.circle") { showAccount = true }
+                }
+                Button("管理笔记库…", systemImage: "books.vertical") { catalog.open(nil) }
+            }
+        } label: {
+            Label("笔记库", systemImage: "books.vertical")
+        }
+    }
+}
+
 struct SyncStatusView: View {
     @Environment(SyncEngine.self) private var engine
 
@@ -544,6 +578,10 @@ struct SyncStatusView: View {
         let s = engine.state
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
+                if engine.isLocal {
+                    Image(systemName: "internaldrive")
+                    Text("本地笔记库 · 仅保存在本机")
+                } else {
                 switch s.status {
                 case .syncing:
                     ProgressView().controlSize(.mini)
@@ -566,6 +604,7 @@ struct SyncStatusView: View {
                     } else {
                         Text("尚未同步")
                     }
+                }
                 }
             }
             if s.blocked > 0 {

@@ -51,7 +51,8 @@ public final class SyncEngine {
 
     @ObservationIgnored var outbox: [String: OutboxEntry] = [:]
     @ObservationIgnored private let store: LocalStore
-    @ObservationIgnored private let transport: SyncTransport
+    /// Nil for a local library: edits are only saved, never queued or sent.
+    @ObservationIgnored private let transport: SyncTransport?
     @ObservationIgnored private var hlc: HLC
     @ObservationIgnored private let now: () -> Millis
     @ObservationIgnored private let debounce: Duration
@@ -74,7 +75,7 @@ public final class SyncEngine {
     static let pushBytes = 6 << 20
     static let maxRetry: Duration = .seconds(60)
 
-    public init(store: LocalStore, transport: SyncTransport, device: String,
+    public init(store: LocalStore, transport: SyncTransport?, device: String,
                 debounce: Duration = .milliseconds(800), persistDelay: Duration = .milliseconds(300),
                 now: @escaping () -> Millis = { Millis(Date().timeIntervalSince1970 * 1000) }) {
         self.store = store
@@ -107,7 +108,7 @@ public final class SyncEngine {
 
     /// Pushes, then pulls. Concurrent calls coalesce into one more round.
     public func sync() async {
-        guard !stopped else { return }
+        guard !stopped, transport != nil else { return }
         if let running {
             again = true
             await running.value
@@ -156,7 +157,7 @@ public final class SyncEngine {
 
     /// Schedules a sync (default: the edit debounce), replacing a scheduled one.
     public func scheduleSync(after delay: Duration? = nil) {
-        guard !stopped else { return }
+        guard !stopped, transport != nil else { return }
         syncTimer?.cancel()
         let delay = delay ?? debounce
         syncTimer = Task { [weak self] in
@@ -183,6 +184,7 @@ public final class SyncEngine {
 
     func pull() async throws {
         let full = cursor == 0
+        guard let transport else { return }
         let res = full ? try await transport.snapshot() : try await transport.pull(since: cursor)
         applyPull(res, snapshot: full)
         cursor = res.seq
@@ -274,6 +276,7 @@ public final class SyncEngine {
     private func send(_ batch: [OutboxEntry]) async throws {
         let res: PushResponse
         do {
+            guard let transport else { return }
             res = try await transport.push(batch.map(\.change))
         } catch let e as APIError where e.status == 400 || e.status == 413 {
             if batch.count == 1 {
@@ -358,6 +361,8 @@ public final class SyncEngine {
     // MARK: Outbox (guide 6.6)
 
     private func enqueue(_ type: EntityType, _ id: String, _ fields: [String: JSONValue], delete: Bool = false, baseRev: Int64? = nil) {
+        // A local library has nothing to sync with: the edit is just saved.
+        guard transport != nil else { return schedulePersist() }
         let key = "\(type.rawValue):\(id)"
         let ts = hlc.tick(now: now())
         var e = outbox[key] ?? OutboxEntry(key: key, type: type, id: id, op: .upsert, fields: [:], hlc: ts,
@@ -587,6 +592,9 @@ public final class SyncEngine {
     }
 
     // MARK: Queries
+
+    /// A local library: no server, no outbox.
+    public var isLocal: Bool { transport == nil }
 
     public var liveNotes: [Note] { notes.values.filter { !$0.isTrashed && !$0.deleted } }
     public var trashedNotes: [Note] { notes.values.filter(\.isTrashed) }

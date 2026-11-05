@@ -2,28 +2,31 @@ import Foundation
 import Network
 import Observation
 
-/// One signed-in account's notes on this device: the sync engine plus what
-/// drives it (start-up, server events, network changes, app lifecycle; guide 6.8).
+/// One open library: the engine over its database plus, for a server
+/// library, what drives sync (start-up, server events, network changes, app
+/// lifecycle; guide 6.8). A local library has no account and never syncs.
 @MainActor
 @Observable
 public final class Library {
     public let engine: SyncEngine
-    public let account: StoredAccount
+    public let ref: LibraryRef
+    /// The signed-in account, for a server library.
+    public let account: StoredAccount?
     public private(set) var loadError: String?
 
-    @ObservationIgnored private let api: APIClient
+    @ObservationIgnored private let api: APIClient?
     @ObservationIgnored private let storeURL: URL?
     @ObservationIgnored private var events: Task<Void, Never>?
     @ObservationIgnored private var monitor: NWPathMonitor?
     @ObservationIgnored private var online = true
     @ObservationIgnored private var active = false
 
-    public init(account: StoredAccount, transport: HTTPTransport = URLSessionTransport(), storeURL: URL?? = nil) throws {
-        self.account = account
-        let url = storeURL ?? LocalStore.url(for: account)
-        self.storeURL = url
-        api = APIClient(server: account.server, token: account.token, transport: transport)
-        engine = SyncEngine(store: try LocalStore(url: url), transport: api, device: Self.deviceID())
+    public init(ref: LibraryRef, account: StoredAccount?, storeURL: URL?, transport: HTTPTransport = URLSessionTransport()) throws {
+        self.ref = ref
+        self.account = ref.isLocal ? nil : account
+        self.storeURL = storeURL
+        api = self.account.map { APIClient(server: $0.server, token: $0.token, transport: transport) }
+        engine = SyncEngine(store: try LocalStore(url: storeURL), transport: api, device: Self.deviceID())
         do { try engine.load() } catch { loadError = error.localizedDescription }
     }
 
@@ -31,6 +34,7 @@ public final class Library {
     public func activate() {
         guard !active else { return }
         active = true
+        guard api != nil else { return }
         Task { await engine.sync() }
         connectEvents()
         startMonitor()
@@ -60,7 +64,7 @@ public final class Library {
         engine.stop()
     }
 
-    /// Deletes this account's local database.
+    /// Deletes this library's local database.
     public func destroy() {
         close()
         if let storeURL { LocalStore.remove(at: storeURL) }
@@ -70,6 +74,7 @@ public final class Library {
 
     private func connectEvents() {
         events?.cancel()
+        guard let api else { return }
         let source = SyncEvents(api: api)
         events = Task { [weak self] in
             var delay: Duration = .seconds(3)

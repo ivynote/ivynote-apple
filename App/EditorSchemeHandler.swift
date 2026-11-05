@@ -15,11 +15,12 @@ final class EditorSchemeHandler: NSObject, WKURLSchemeHandler {
     static let pageURL = URL(string: "\(scheme)://editor/index.html")!
 
     private let root: URL?
-    private let account: StoredAccount
+    /// Nil in a local library, which has no server to fetch attachments from.
+    private let account: StoredAccount?
     private let session: URLSession
     private var running: [ObjectIdentifier: Task<Void, Never>] = [:]
 
-    init(account: StoredAccount) {
+    init(account: StoredAccount?) {
         self.account = account
         root = Bundle.main.url(forResource: "Editor", withExtension: nil)
         let config = URLSessionConfiguration.default
@@ -62,7 +63,7 @@ final class EditorSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     private func fetchAttachment(id: String, thumb: Bool, task: any WKURLSchemeTask) {
-        guard id.wholeMatch(of: /[A-Za-z0-9_-]{8,64}/) != nil else {
+        guard let account, id.wholeMatch(of: /[A-Za-z0-9_-]{8,64}/) != nil else {
             return respond(task, status: 404, headers: [:], data: Data())
         }
         var url = account.server.apiBase.appending(path: "attachments/\(id)/raw")

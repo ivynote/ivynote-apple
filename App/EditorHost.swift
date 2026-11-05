@@ -19,7 +19,7 @@ final class EditorHost: NSObject {
     @ObservationIgnored private var pageBody = ""
     @ObservationIgnored var onOpenNote: ((_ id: String, _ title: String) -> Void)?
 
-    init(account: StoredAccount, engine: SyncEngine) {
+    init(account: StoredAccount?, engine: SyncEngine) {
         self.engine = engine
         let config = WKWebViewConfiguration()
         let schemes = EditorSchemeHandler(account: account)

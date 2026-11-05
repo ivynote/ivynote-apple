@@ -1,7 +1,8 @@
 import Foundation
 import Observation
 
-/// Who is signed in, to which server, and whether the server is reachable.
+/// Who is signed in to a server library, and whether the server is reachable.
+/// Each server library has its own, over its own Keychain item.
 ///
 /// Follows the guide's session rules: the cached account opens the app
 /// immediately; `GET /me` refreshes it in the background; only 401/403 end

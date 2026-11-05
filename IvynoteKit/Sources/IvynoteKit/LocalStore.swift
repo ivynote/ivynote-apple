@@ -125,9 +125,16 @@ public final class LocalStore {
 
     /// Where an account's library lives: one database per server + user, so
     /// accounts never mix (guide 3.1).
-    public static func url(for account: StoredAccount, in base: URL? = nil) -> URL {
-        let root = base ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    /// Application Support/Ivynote: every library's folder is under it.
+    public static var defaultRoot: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "Ivynote", directoryHint: .isDirectory)
+    }
+
+    /// Where builds before libraries kept an account's database; only
+    /// `LibraryCatalog.migrateLegacy` still needs it.
+    public static func url(for account: StoredAccount, in base: URL? = nil) -> URL {
+        let root = base ?? defaultRoot
         let key = "\(account.server.description)|\(account.user.id)"
         let digest = SHA256.hash(data: Data(key.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
         return root.appending(path: "libraries/\(digest)/library.sqlite")

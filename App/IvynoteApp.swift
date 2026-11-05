@@ -3,13 +3,16 @@ import SwiftUI
 
 @main
 struct IvynoteApp: App {
-    @State private var session = SessionStore()
+    @State private var catalog: LibraryCatalog = {
+        let c = LibraryCatalog()
+        c.migrateLegacy()
+        return c
+    }()
 
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environment(session)
-                .task { await session.restore() }
+                .environment(catalog)
         }
         #if os(macOS)
         .defaultSize(width: 1100, height: 760)
@@ -17,23 +20,20 @@ struct IvynoteApp: App {
     }
 }
 
+/// The open library, or the list of libraries when none is open.
 struct RootView: View {
-    @Environment(SessionStore.self) private var session
+    @Environment(LibraryCatalog.self) private var catalog
 
     var body: some View {
         Group {
-            switch session.state {
-            case .loading:
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .signedOut:
-                OnboardingView()
-            case .signedIn(let account):
-                SignedInView(account: account)
-                    // A different account gets its own library.
-                    .id("\(account.server)|\(account.user.id)")
+            if let ref = catalog.active {
+                LibraryRoot(ref: ref)
+                    // Another library is another world: fresh state for it.
+                    .id(ref.id)
+            } else {
+                LibrariesView()
             }
         }
-        .animation(.default, value: session.state)
+        .animation(.default, value: catalog.activeID)
     }
 }

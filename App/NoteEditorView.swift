@@ -1,7 +1,7 @@
 import IvynoteKit
 import SwiftUI
 
-/// A note: the title as a native field, the body in the web client's
+/// A note: the title in the navigation bar (tap it for 重命名), the body in the web client's
 /// CodeMirror editor with live preview. Every change is saved locally at once
 /// and synced in the background; there is no save button (guide 3.2).
 struct NoteEditorView: View {
@@ -9,6 +9,9 @@ struct NoteEditorView: View {
     @Environment(EditorHost.self) private var host
     @Environment(\.colorScheme) private var colorScheme
     let noteID: String
+
+    @State private var renaming = false
+    @State private var titleDraft = ""
 
     var body: some View {
         if let note = engine.notes[noteID] {
@@ -23,15 +26,6 @@ struct NoteEditorView: View {
                     .padding(12)
                     .background(.orange.opacity(0.12))
                 }
-                TextField("无标题", text: title, axis: .vertical)
-                    .font(.title2.weight(.semibold))
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...3)
-                    .padding(.horizontal, 18)
-                    .padding(.top, 14)
-                    .padding(.bottom, 6)
-                    .onSubmit { host.focus() }
-                    .disabled(note.isTrashed)
                 MarkdownEditor(host: host)
             }
             // The page's --surface, so the title and the body are one sheet.
@@ -41,10 +35,24 @@ struct NoteEditorView: View {
                 if host.focused && !note.isTrashed { FormatBar(host: host) }
             }
             #endif
+            // One title, in the bar: editable there unless the note is in the trash.
             .navigationTitle(displayTitle(note))
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
+            .toolbarTitleMenu {
+                if !note.isTrashed {
+                    Button("重命名", systemImage: "pencil") {
+                        titleDraft = note.title
+                        renaming = true
+                    }
+                }
+            }
+            .alert("重命名笔记", isPresented: $renaming) {
+                TextField("无标题", text: $titleDraft)
+                Button("取消", role: .cancel) {}
+                Button("保存") { rename() }
+            }
             .toolbar {
                 if !note.isTrashed {
                     Menu("更多", systemImage: "ellipsis.circle") {
@@ -69,9 +77,9 @@ struct NoteEditorView: View {
         }
     }
 
-    private var title: Binding<String> {
-        Binding(get: { engine.notes[noteID]?.title ?? "" },
-                set: { engine.updateNote(noteID, .init(title: String($0.replacingOccurrences(of: "\n", with: " ").prefix(300)))) })
+    private func rename() {
+        let v = String(titleDraft.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces).prefix(300))
+        if v != engine.notes[noteID]?.title { engine.updateNote(noteID, .init(title: v)) }
     }
 }
 

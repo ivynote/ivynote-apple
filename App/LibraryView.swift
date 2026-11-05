@@ -161,12 +161,7 @@ struct ShelfView: View {
         #endif
         .environment(\.defaultMinListRowHeight, ShelfMetrics.rowHeight)
         .searchable(text: $query, placement: .sidebar, prompt: "搜索笔记")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button("新建笔记", systemImage: "square.and.pencil") { newNote(in: "") }
-                    .keyboardShortcut("n", modifiers: .command)
-            }
-        }
+        .modifier(NewNoteButton { newNote(in: "") })
         .refreshable { await engine.sync() }
         .alert("新建笔记本", isPresented: Binding(get: { newFolderParent != nil }, set: { if !$0 { newFolderParent = nil } })) {
             TextField("名称", text: $nameDraft)
@@ -648,5 +643,43 @@ struct SyncStatusView: View {
         }
         .font(.footnote)
         .foregroundStyle(.secondary)
+    }
+}
+
+/// 新建笔记: on iPhone at the bottom right, where the thumb is and where
+/// Notes keeps it, beside the search field; on iPad and the Mac in the
+/// sidebar's toolbar, with ⌘N.
+private struct NewNoteButton: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    let action: () -> Void
+
+    private var button: some View {
+        Button("新建笔记", systemImage: "square.and.pencil", action: action)
+            .keyboardShortcut("n", modifiers: .command)
+    }
+
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        if sizeClass == .compact {
+            if #available(iOS 26, *) {
+                content.toolbar {
+                    DefaultToolbarItem(kind: .search, placement: .bottomBar)
+                    ToolbarSpacer(.flexible, placement: .bottomBar)
+                    ToolbarItem(placement: .bottomBar) { button }
+                }
+            } else {
+                content.toolbar {
+                    ToolbarItemGroup(placement: .bottomBar) {
+                        Spacer()
+                        button
+                    }
+                }
+            }
+        } else {
+            content.toolbar { ToolbarItem(placement: .primaryAction) { button } }
+        }
+        #else
+        content.toolbar { ToolbarItem(placement: .primaryAction) { button } }
+        #endif
     }
 }

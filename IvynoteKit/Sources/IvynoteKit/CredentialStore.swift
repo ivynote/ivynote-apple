@@ -24,7 +24,7 @@ public protocol CredentialStore: Sendable {
 public struct KeychainError: Error, Equatable, LocalizedError {
     public let status: OSStatus
     public var errorDescription: String? {
-        "钥匙串错误：\(SecCopyErrorMessageString(status, nil) as String? ?? String(status))"
+        L10n.s.keychainError(SecCopyErrorMessageString(status, nil) as String? ?? String(status))
     }
 }
 

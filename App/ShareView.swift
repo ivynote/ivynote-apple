@@ -31,15 +31,15 @@ struct ShareView: View {
             Form {
                 if library.api == nil {
                     Section {
-                        Text("本地笔记库没有服务器，不能生成公开链接。开启多端同步后可以分享。")
+                        Text(L.localNoShare)
                             .font(.callout).foregroundStyle(.secondary)
                     }
                 } else if loading {
                     Section { HStack { Spacer(); ProgressView(); Spacer() } }
                 } else if offline {
                     Section {
-                        Label("分享链接需要联网。", systemImage: "wifi.slash").foregroundStyle(.secondary)
-                        Button("重试") { Task { await load() } }
+                        Label(L.shareNeedsNetwork, systemImage: "wifi.slash").foregroundStyle(.secondary)
+                        Button(L.retry) { Task { await load() } }
                     }
                 } else {
                     linkSection
@@ -49,15 +49,15 @@ struct ShareView: View {
                 exportSection
             }
             .formStyle(.grouped)
-            .navigationTitle("分享笔记")
+            .navigationTitle(L.shareNote)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button(L.done) { dismiss() } }
             }
-            .alert("出错了", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
-                Button("好", role: .cancel) {}
+            .alert(L.error, isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+                Button(L.ok, role: .cancel) {}
             } message: {
                 Text(error ?? "")
             }
@@ -77,7 +77,7 @@ struct ShareView: View {
     private var live: Bool { share?.enabled == true && share?.hasPassword == true }
     private var asking: Bool { enabling || changing || (share?.enabled == true && share?.hasPassword == false) }
     private var link: String { share.flatMap { library.api?.shareURL($0).absoluteString } ?? "" }
-    private var title: String { note.map(displayTitle) ?? "无标题" }
+    private var title: String { note.map(displayTitle) ?? L.untitled }
 
     // MARK: Sections
 
@@ -85,8 +85,8 @@ struct ShareView: View {
         Section {
             Toggle(isOn: Binding(get: { live || enabling }, set: toggle)) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("公开链接")
-                    Text("拿到链接和访问密码的人可以阅读这篇笔记").font(.footnote).foregroundStyle(.secondary)
+                    Text(L.publicLink)
+                    Text(L.publicLinkHint).font(.footnote).foregroundStyle(.secondary)
                 }
             }
             .disabled(saving)
@@ -96,34 +96,34 @@ struct ShareView: View {
     private var passwordSection: some View {
         Section {
             HStack {
-                TextField("新密码（至少 6 位）", text: $password)
+                TextField(L.newPasswordPlaceholder, text: $password)
                     .font(.system(.body, design: .monospaced))
                     .autocorrectionDisabled()
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
                     #endif
                     .onSubmit(submitPassword)
-                Button("随机生成") { password = Share.generatePassword() }
+                Button(L.generate) { password = Share.generatePassword() }
                     .buttonStyle(.borderless)
             }
             if !password.isEmpty && !Share.validPassword(password) {
-                Text("密码至少 6 位").font(.footnote).foregroundStyle(.red)
+                Text(L.passwordMin6).font(.footnote).foregroundStyle(.red)
             }
             HStack {
                 if changing {
-                    Button("取消") { changing = false; password = "" }.buttonStyle(.borderless)
+                    Button(L.cancel) { changing = false; password = "" }.buttonStyle(.borderless)
                 }
                 Spacer()
                 Button(action: submitPassword) {
-                    if saving { ProgressView().controlSize(.small) } else { Text(changing ? "保存" : "生成链接") }
+                    if saving { ProgressView().controlSize(.small) } else { Text(changing ? L.save : L.createLink) }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!Share.validPassword(password) || saving)
             }
         } footer: {
             Label(share?.enabled == true && share?.hasPassword == false
-                  ? "这个链接是在要求密码之前创建的，设置密码后才能继续访问。"
-                  : "为保护你的隐私，公开链接必须设置至少 6 位的访问密码。", systemImage: "lock")
+                  ? L.legacyShare
+                  : L.needPassword, systemImage: "lock")
         }
     }
 
@@ -136,23 +136,23 @@ struct ShareView: View {
                     .truncationMode(.middle)
                     .textSelection(.enabled)
                 Spacer()
-                Button("复制链接") { copy(link) }.buttonStyle(.borderless)
+                Button(L.copyLink) { copy(link) }.buttonStyle(.borderless)
             }
             if share.expired {
-                Text("分享已过期").font(.footnote).foregroundStyle(.red)
+                Text(L.shareExpired).font(.footnote).foregroundStyle(.red)
             }
-            LabeledContent("访问密码") {
+            LabeledContent(L.accessPassword) {
                 HStack(spacing: 12) {
                     if share.password.isEmpty {
-                        Text("已设置访问密码").foregroundStyle(.secondary)
+                        Text(L.passwordSet).foregroundStyle(.secondary)
                     } else {
                         Text(share.password).font(.system(.body, design: .monospaced).weight(.medium)).textSelection(.enabled)
                         Button { copy(share.password) } label: { Image(systemName: "doc.on.doc") }
                             .buttonStyle(.borderless)
-                            .accessibilityLabel("复制密码")
+                            .accessibilityLabel(L.copyPassword)
                     }
                     if !changing {
-                        Button("修改") {
+                        Button(L.change) {
                             changing = true
                             password = Share.generatePassword()
                         }
@@ -161,32 +161,32 @@ struct ShareView: View {
                 }
             }
             if !share.password.isEmpty {
-                Button("复制链接和密码", systemImage: "doc.on.doc") { copy(message(share)) }
-                ShareLink(item: message(share)) { Label("通过其他应用发送…", systemImage: "square.and.arrow.up") }
+                Button(L.copyLinkAndPassword, systemImage: "doc.on.doc") { copy(message(share)) }
+                ShareLink(item: message(share)) { Label(L.sendViaApp, systemImage: "square.and.arrow.up") }
             }
-            Picker("有效期", selection: Binding(get: { -2 }, set: { days in save(days: days) })) {
-                Text(share.expiresAt > 0 ? "保持当前（\(Date(timeIntervalSince1970: Double(share.expiresAt) / 1000).formatted(date: .abbreviated, time: .omitted))）" : "永久有效").tag(-2)
-                Text("1 天").tag(1)
-                Text("7 天").tag(7)
-                Text("30 天").tag(30)
-                if share.expiresAt > 0 { Text("永久有效").tag(0) }
+            Picker(L.expires, selection: Binding(get: { -2 }, set: { days in save(days: days) })) {
+                Text(share.expiresAt > 0 ? L.keepCurrent(Date(timeIntervalSince1970: Double(share.expiresAt) / 1000).formatted(Date.FormatStyle(date: .abbreviated, time: .omitted).locale(L.locale))) : L.neverExpires).tag(-2)
+                Text(L.days(1)).tag(1)
+                Text(L.days(7)).tag(7)
+                Text(L.days(30)).tag(30)
+                if share.expiresAt > 0 { Text(L.neverExpires).tag(0) }
             }
             .disabled(saving)
-            LabeledContent("访问次数", value: "\(share.views) 次")
+            LabeledContent(L.views, value: L.timesCount(share.views))
         }
     }
 
     private var exportSection: some View {
         Section {
-            Button("复制富文本", systemImage: "doc.richtext") { Task { await copyAs(rich: true) } }
-            Button("复制 Markdown", systemImage: "doc.plaintext") { Task { await copyAs(rich: false) } }
-            Button("导出 .md 文件", systemImage: "square.and.arrow.down") { Task { await export() } }
+            Button(L.copyRich, systemImage: "doc.richtext") { Task { await copyAs(rich: true) } }
+            Button(L.copyMarkdown, systemImage: "doc.plaintext") { Task { await copyAs(rich: false) } }
+            Button(L.exportMd, systemImage: "square.and.arrow.down") { Task { await export() } }
         } header: {
-            Text("复制或导出")
+            Text(L.copyOrExport)
         } footer: {
             Text(offline || library.api == nil
-                 ? "离线时附件不会替换为公网链接。"
-                 : "附件会自动公开并替换为公网链接，方便粘贴到博客、公众号等地方。")
+                 ? L.copyAsOffline
+                 : L.copyAsHint)
         }
     }
 
@@ -263,12 +263,12 @@ struct ShareView: View {
     }
 
     private func message(_ share: Share) -> String {
-        "\(title)\n链接：\(link)\n密码：\(share.password)"
+        L.shareMessage(title, link, share.password)
     }
 
     private func copy(_ text: String) {
         Clipboard.copy(text)
-        withAnimation { notice = "已复制" }
+        withAnimation { notice = L.copied }
     }
 
     /// The note with public attachment links; offline, the local text as is.
@@ -293,7 +293,7 @@ struct ShareView: View {
             } else {
                 Clipboard.copy(md)
             }
-            withAnimation { notice = "已复制" }
+            withAnimation { notice = L.copied }
         } catch {
             self.error = error.localizedDescription
         }

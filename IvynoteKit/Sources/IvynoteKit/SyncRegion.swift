@@ -25,8 +25,8 @@ public enum SyncRegion: String, CaseIterable, Identifiable, Sendable {
 
     public var title: String {
         switch self {
-        case .cn: "中国大陆"
-        case .global: "全球"
+        case .cn: L10n.s.regionCn
+        case .global: L10n.s.regionGlobal
         }
     }
 

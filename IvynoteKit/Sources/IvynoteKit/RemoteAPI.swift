@@ -25,13 +25,13 @@ public enum MediaFilter: String, CaseIterable, Sendable {
 
     public var label: String {
         switch self {
-        case .all: "全部"
-        case .image: "图片"
-        case .video: "视频"
-        case .audio: "音频"
-        case .file: "文件"
-        case .orphaned: "未引用"
-        case .trash: "回收站"
+        case .all: L10n.s.filterAll
+        case .image: L10n.s.filterImages
+        case .video: L10n.s.filterVideo
+        case .audio: L10n.s.filterAudio
+        case .file: L10n.s.filterFiles
+        case .orphaned: L10n.s.unreferenced
+        case .trash: L10n.s.trash
         }
     }
 

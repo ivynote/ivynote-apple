@@ -16,10 +16,10 @@ public struct ServerAddress: Hashable, Codable, Sendable, CustomStringConvertibl
 
         public var errorDescription: String? {
             switch self {
-            case .empty: "请填写服务器地址"
-            case .invalid: "服务器地址无效"
-            case .unsupportedScheme(let s): "不支持的协议：\(s)"
-            case .insecureRemote(let host): "\(host) 不是局域网地址，必须使用 https://"
+            case .empty: L10n.s.serverEmpty
+            case .invalid: L10n.s.serverInvalid
+            case .unsupportedScheme(let s): L10n.s.unsupportedScheme(s)
+            case .insecureRemote(let host): L10n.s.insecureRemote(host)
             }
         }
     }

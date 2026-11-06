@@ -2,7 +2,7 @@
 // (@ivynote/editor, live preview) in a WKWebView, driven over a small bridge.
 //
 // Swift → JS: window.ivy.load / setBody / setTitles / setKinds / setKind /
-//             setTheme / setReadonly / focus / command / scrollToLine /
+//             setTheme / setLanguage / setReadonly / focus / command / scrollToLine /
 //             insert / setBacklinks / render
 // JS → Swift: webkit.messageHandlers.ivy.postMessage({ type, ... })
 //   ready              the page can take a document
@@ -62,6 +62,23 @@ let kinds: Record<string, string> = {};
 let lastEmitted = '';
 let view: EditorView | null = null;
 const roConf = new Compartment();
+const placeholderConf = new Compartment();
+
+// --- the interface language (setLanguage): the placeholder, the words
+// formatting wraps around an empty selection, the backlinks ---
+
+const words = {
+	zh: {
+		placeholder: '开始写作…', bold: '加粗', italic: '斜体', strike: '删除线', untitled: '无标题',
+		backlinks: '反向链接', backlinkCount: (n: number) => `${n} 条反向链接`
+	},
+	en: {
+		placeholder: 'Start writing…', bold: 'bold', italic: 'italic', strike: 'strikethrough', untitled: 'Untitled',
+		backlinks: 'Backlinks', backlinkCount: (n: number) => `${n} ${n === 1 ? 'backlink' : 'backlinks'}`
+	}
+};
+let lang: keyof typeof words = 'zh';
+const w = () => words[lang];
 
 /** Same-origin path the native scheme handler answers with the attachment. */
 function resource(id: string, thumb?: boolean): string {
@@ -96,13 +113,13 @@ function extensions(readonly: boolean) {
 		markdownHighlight,
 		baseTheme,
 		EditorView.lineWrapping,
-		placeholder('开始写作…'),
+		placeholderConf.of(placeholder(w().placeholder)),
 		autocompletion({ override: [wikiCompletion(completions)], icons: false, activateOnTyping: true }),
 		keymap.of([
-			{ key: 'Mod-b', run: (v) => toggleWrap(v, '**', '加粗') },
-			{ key: 'Mod-i', run: (v) => toggleWrap(v, '*', '斜体') },
+			{ key: 'Mod-b', run: (v) => toggleWrap(v, '**', w().bold) },
+			{ key: 'Mod-i', run: (v) => toggleWrap(v, '*', w().italic) },
 			{ key: 'Mod-e', run: (v) => toggleWrap(v, '`', 'code') },
-			{ key: 'Mod-Shift-x', run: (v) => toggleWrap(v, '~~', '删除线') },
+			{ key: 'Mod-Shift-x', run: (v) => toggleWrap(v, '~~', w().strike) },
 			{ key: 'Mod-k', run: insertLink },
 			{ key: 'Mod-Shift-k', run: insertWiki },
 			{ key: 'Mod-Alt-1', run: (v) => toggleLinePrefix(v, '# ') },
@@ -181,16 +198,17 @@ interface Backlink {
 }
 
 /** The notes that link here, below the body as on the web (guide 11.3). */
+let backlinks: Backlink[] = [];
 function renderBacklinks(list: Backlink[]) {
 	if (!footer) return;
 	footer.replaceChildren();
 	if (!list.length) return;
 	const section = document.createElement('section');
 	section.className = 'ivy-backlinks';
-	section.setAttribute('aria-label', '反向链接');
+	section.setAttribute('aria-label', w().backlinks);
 	const head = document.createElement('div');
 	head.className = 'eyebrow';
-	head.textContent = `${list.length} 条反向链接`;
+	head.textContent = w().backlinkCount(list.length);
 	section.append(head);
 	for (const b of list) {
 		const a = document.createElement('button');
@@ -198,7 +216,7 @@ function renderBacklinks(list: Backlink[]) {
 		a.className = 'ivy-backlink';
 		const t = document.createElement('span');
 		t.className = 'ivy-backlink-title';
-		t.textContent = b.title || '无标题';
+		t.textContent = b.title || w().untitled;
 		const c = document.createElement('span');
 		c.className = 'ivy-backlink-context';
 		c.textContent = b.context || '…';
@@ -296,7 +314,16 @@ window.ivy = {
 	},
 
 	setBacklinks(list: Backlink[]) {
+		backlinks = list;
 		renderBacklinks(list);
+	},
+
+	/** `zh` or `en`, as the app's interface. */
+	setLanguage(l: string) {
+		lang = l === 'en' ? 'en' : 'zh';
+		document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+		view?.dispatch({ effects: placeholderConf.reconfigure(placeholder(w().placeholder)) });
+		renderBacklinks(backlinks);
 	},
 
 	/** Markdown as HTML, for copying a note as rich text. */
@@ -335,9 +362,9 @@ window.ivy = {
 	command(name: string) {
 		if (!view) return;
 		switch (name) {
-			case 'bold': toggleWrap(view, '**', '加粗'); break;
-			case 'italic': toggleWrap(view, '*', '斜体'); break;
-			case 'strike': toggleWrap(view, '~~', '删除线'); break;
+			case 'bold': toggleWrap(view, '**', w().bold); break;
+			case 'italic': toggleWrap(view, '*', w().italic); break;
+			case 'strike': toggleWrap(view, '~~', w().strike); break;
 			case 'code': toggleWrap(view, '`', 'code'); break;
 			case 'h1': toggleLinePrefix(view, '# '); break;
 			case 'h2': toggleLinePrefix(view, '## '); break;

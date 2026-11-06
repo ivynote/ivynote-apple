@@ -87,7 +87,7 @@ public final class LibraryCatalog {
 
     @discardableResult
     public func createLocal(name: String) -> LibraryRef {
-        add(LibraryRef(id: Self.newID(), kind: .local, name: clean(name, or: "我的笔记"), server: nil,
+        add(LibraryRef(id: Self.newID(), kind: .local, name: clean(name, or: L10n.s.defaultLibraryName), server: nil,
                        account: nil, userID: nil, createdAt: now(), openedAt: now()))
     }
 

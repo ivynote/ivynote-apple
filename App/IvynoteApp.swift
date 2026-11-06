@@ -13,6 +13,7 @@ struct IvynoteApp: App {
         WindowGroup {
             RootView()
                 .environment(catalog)
+                .interfaceLanguage()
         }
         #if os(macOS)
         .defaultSize(width: 1100, height: 760)

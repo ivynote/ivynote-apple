@@ -28,13 +28,13 @@ public enum APIError: Error, Equatable, LocalizedError {
         switch self {
         case .server(let status, let message):
             switch status {
-            case 413: "文件超过服务器的上传上限"
-            case 429: "尝试次数过多，请 15 分钟后再试"
-            case 500...: "服务器暂时不可用（\(status)）"
-            default: message.isEmpty ? "请求失败（\(status)）" : message
+            case 413: L10n.s.fileTooLarge
+            case 429: L10n.s.tooManyAttempts
+            case 500...: L10n.s.serverUnavailable(status)
+            default: message.isEmpty ? L10n.s.requestFailedStatus(status) : message
             }
-        case .unreachable(let detail): "无法连接服务器：\(detail)"
-        case .invalidResponse: "这个地址不是常青笔记服务器"
+        case .unreachable(let detail): L10n.s.unreachable(detail)
+        case .invalidResponse: L10n.s.notIvynote
         }
     }
 }

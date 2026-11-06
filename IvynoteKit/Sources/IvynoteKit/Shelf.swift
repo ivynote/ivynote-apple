@@ -15,9 +15,9 @@ public enum Shelf {
 
         public var label: String {
             switch self {
-            case .updated: "更新时间"
-            case .created: "创建时间"
-            case .title: "标题"
+            case .updated: L10n.s.sortUpdated
+            case .created: L10n.s.sortCreated
+            case .title: L10n.s.sortTitle
             }
         }
     }
@@ -155,17 +155,17 @@ public enum Shelf {
         let pinned = live.filter(\.pinned)
         if !pinned.isEmpty {
             let open = !expanded.contains(closedKey(pinnedKey))
-            rows.append(Row(key: pinnedKey, kind: .section, depth: 0, parent: "", label: "置顶", count: pinned.count,
+            rows.append(Row(key: pinnedKey, kind: .section, depth: 0, parent: "", label: L10n.s.pinned, count: pinned.count,
                             expandable: true, open: open))
             if open { noteRows(pinned, parent: pinnedKey, depth: 0) }
         }
 
-        rows.append(Row(key: "h:notes", kind: .heading, depth: 0, parent: "", label: "笔记", count: 0,
+        rows.append(Row(key: "h:notes", kind: .heading, depth: 0, parent: "", label: L10n.s.notes, count: 0,
                         expandable: false, open: false, folderID: ""))
         if !folders.isEmpty {
             folderRows("", 0)
         } else {
-            rows.append(Row(key: "h:create", kind: .create, depth: 0, parent: "", label: "新建笔记本", count: 0,
+            rows.append(Row(key: "h:create", kind: .create, depth: 0, parent: "", label: L10n.s.newFolder, count: 0,
                             expandable: false, open: false))
         }
         // Notes outside any notebook sit below them, like files at the root of a drive.
@@ -173,7 +173,7 @@ public enum Shelf {
 
         if !tags.isEmpty {
             let open = expanded.contains(tagsKey)
-            var row = Row(key: tagsKey, kind: .group, depth: 0, parent: "", label: "标签", count: 0, expandable: true, open: open)
+            var row = Row(key: tagsKey, kind: .group, depth: 0, parent: "", label: L10n.s.tags, count: 0, expandable: true, open: open)
             row.gap = true
             rows.append(row)
             if open {
@@ -189,7 +189,7 @@ public enum Shelf {
                 }
             }
         }
-        group(trashKey, "回收站", trashed, trash: true, gap: tags.isEmpty)
+        group(trashKey, L10n.s.trash, trashed, trash: true, gap: tags.isEmpty)
         return rows
     }
 

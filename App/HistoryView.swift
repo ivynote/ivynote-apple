@@ -23,30 +23,30 @@ struct HistoryView: View {
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle("历史版本")
+                .navigationTitle(L.history)
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
                 #endif
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
+                    ToolbarItem(placement: .cancellationAction) { Button(L.close) { dismiss() } }
                     if let selected, selected.body != nil {
                         ToolbarItem(placement: .primaryAction) {
-                            Picker("显示", selection: $source) {
-                                Text("渲染").tag(false)
-                                Text("源码").tag(true)
+                            Picker(L.show, selection: $source) {
+                                Text(L.rendered).tag(false)
+                                Text(L.source).tag(true)
                             }
                             .pickerStyle(.segmented)
                             .fixedSize()
                         }
                         if selected.rev != revisions.first?.rev {
                             ToolbarItem(placement: .confirmationAction) {
-                                Button("恢复此版本") { confirmRestore = true }
+                                Button(L.restoreVersion) { confirmRestore = true }
                             }
                         }
                     }
                 }
                 .confirmationDialog(restorePrompt, isPresented: $confirmRestore, titleVisibility: .visible) {
-                    Button("恢复此版本") { restore() }
+                    Button(L.restoreVersion) { restore() }
                 }
         }
         #if os(macOS)
@@ -57,21 +57,21 @@ struct HistoryView: View {
 
     @ViewBuilder private var content: some View {
         if library.api == nil {
-            ContentUnavailableView("本地笔记库没有历史版本", systemImage: "clock.arrow.circlepath",
-                                   description: Text("历史版本保存在服务器上，开启同步后可用。"))
+            ContentUnavailableView(L.localNoHistory, systemImage: "clock.arrow.circlepath",
+                                   description: Text(L.localNoHistoryHint))
         } else if loading {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let error {
             ContentUnavailableView {
-                Label("无法读取历史版本", systemImage: "wifi.exclamationmark")
+                Label(L.historyLoadFailed, systemImage: "wifi.exclamationmark")
             } description: {
                 Text(error)
             } actions: {
-                Button("重试") { Task { await load() } }
+                Button(L.retry) { Task { await load() } }
             }
         } else if revisions.isEmpty {
-            ContentUnavailableView("暂无历史版本", systemImage: "clock.arrow.circlepath",
-                                   description: Text("同步后的每次修改都会留下一个版本。"))
+            ContentUnavailableView(L.noHistory, systemImage: "clock.arrow.circlepath",
+                                   description: Text(L.noHistoryHint))
         } else if sizeClass == .compact {
             VStack(spacing: 0) {
                 list.frame(height: 200)
@@ -94,7 +94,7 @@ struct HistoryView: View {
             ForEach(Array(revisions.enumerated()), id: \.element.rev) { i, r in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(Self.time(r.createdAt)).font(.callout.weight(.medium))
-                    Text([i == 0 ? "当前版本" : nil, r.device.isEmpty ? "web" : r.device, r.size.byteText]
+                    Text([i == 0 ? L.currentVersion : nil, r.device.isEmpty ? "web" : r.device, r.size.byteText]
                         .compactMap { $0 }.joined(separator: " · "))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -109,7 +109,7 @@ struct HistoryView: View {
     @ViewBuilder private var detail: some View {
         if let selected, let body = selected.body {
             VStack(alignment: .leading, spacing: 0) {
-                Text(selected.title.isEmpty ? "无标题" : selected.title)
+                Text(selected.title.isEmpty ? L.untitled : selected.title)
                     .font(.system(.title3, design: .serif).weight(.semibold))
                     .lineLimit(2)
                     .padding(.horizontal, 18)
@@ -134,7 +134,7 @@ struct HistoryView: View {
 
     private var restorePrompt: String {
         guard let selected else { return "" }
-        return "将笔记恢复为 \(Self.time(selected.createdAt)) 的版本？当前内容会保留在历史中。"
+        return L.restorePrompt(Self.time(selected.createdAt))
     }
 
     private func load() async {
@@ -178,6 +178,6 @@ struct HistoryView: View {
     }
 
     static func time(_ ms: Millis) -> String {
-        Date(timeIntervalSince1970: Double(ms) / 1000).formatted(.dateTime.year().month(.defaultDigits).day().hour().minute())
+        Date(timeIntervalSince1970: Double(ms) / 1000).formatted(.dateTime.year().month(.defaultDigits).day().hour().minute().locale(L10n.s.locale))
     }
 }

@@ -37,7 +37,7 @@ final class MediaLoader {
 
     func data(_ id: String, thumb: Bool = false) async throws -> Data {
         if let local = engine?.uploadFile(id) { return try Data(contentsOf: local.url) }
-        guard let api else { throw APIError.unreachable("本地笔记库没有服务器") }
+        guard let api else { throw APIError.unreachable(L10n.s.localNoServer) }
         let (data, response) = try await EditorSchemeHandler.mediaSession.data(for: api.rawRequest(id, thumb: thumb))
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw APIError.server(status: http.statusCode, message: "")

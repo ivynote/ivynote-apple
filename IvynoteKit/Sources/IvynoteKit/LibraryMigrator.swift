@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Turns on sync for a local library: copies it into a newly registered,
@@ -10,29 +11,41 @@ import Foundation
 /// nothing, and an account holding only this library's own ids counts as a
 /// run to resume.
 ///
-/// The Apple client has no file uploads, so its local libraries hold no
-/// attachments; only folders, tags and notes move.
+/// A local library keeps its files as queued uploads (`local-` ids, see
+/// `SyncEngine.addFile`); they are uploaded first and the notes are pushed
+/// with the server's ids in their place.
 public struct LibraryMigrator: Sendable {
     public struct Content: Sendable {
         public var folders: [Folder]
         public var tags: [Tag]
         public var notes: [Note]
+        /// The library's files and the folder their copies are in.
+        public var uploads: [PendingUpload]
+        public var filesDir: URL?
 
-        public init(folders: [Folder], tags: [Tag], notes: [Note]) {
+        public init(folders: [Folder], tags: [Tag], notes: [Note], uploads: [PendingUpload] = [], filesDir: URL? = nil) {
             self.folders = folders
             self.tags = tags
             self.notes = notes
+            self.uploads = uploads
+            self.filesDir = filesDir
         }
 
         /// Reads a library's database directly; the library should not be open.
         public static func read(from url: URL) throws -> Content {
             let store = try LocalStore(url: url)
-            return Content(folders: try store.all(.folders), tags: try store.all(.tags), notes: try store.all(.notes))
+            return Content(folders: try store.all(.folders), tags: try store.all(.tags), notes: try store.all(.notes),
+                           uploads: try store.all(.uploads), filesDir: store.filesURL)
+        }
+
+        func data(of up: PendingUpload) -> Data? {
+            guard let filesDir else { return nil }
+            return try? Data(contentsOf: filesDir.appending(path: up.file))
         }
     }
 
     public struct Progress: Equatable, Sendable {
-        public enum Phase: Sendable { case check, notes, done }
+        public enum Phase: Sendable { case check, files, notes, done }
         public var phase: Phase
         public var done: Int
         public var total: Int
@@ -40,8 +53,11 @@ public struct LibraryMigrator: Sendable {
 
     public struct Result: Equatable, Sendable {
         public var notes = 0
+        public var files = 0
         /// Changes the server refused: `type:id` and its reason.
         public var rejected: [String] = []
+        /// Files that could not be read or that the server refused: name and reason.
+        public var skippedFiles: [String] = []
     }
 
     public enum Failure: Error, LocalizedError, Equatable {
@@ -80,8 +96,33 @@ public struct LibraryMigrator: Sendable {
         theirs += existing.notes.filter { !$0.deleted }.map(\.id)
         theirs += existing.folders.filter { !$0.deleted }.map(\.id)
         theirs += existing.tags.filter { !$0.deleted }.map(\.id)
-        let strayFiles = existing.attachments.contains { !$0.deleted }
+        // Files are told apart by content: one this library holds may be
+        // left over from an interrupted run.
+        var files: [(up: PendingUpload, data: Data)] = []
+        for up in content.uploads.sorted(by: { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }) {
+            if let data = content.data(of: up) { files.append((up, data)) }
+        }
+        let hashes = Set(files.map { SHA256.hash(data: $0.data).map { String(format: "%02x", $0) }.joined() })
+        let strayFiles = existing.attachments.contains { !$0.deleted && !hashes.contains($0.sha256.lowercased()) }
         if strayFiles || theirs.contains(where: { !ours.contains($0) }) { throw Failure.accountNotEmpty }
+
+        var result = Result()
+        var ids: [String: String] = [:]
+        let readable = Set(files.map(\.up.id))
+        for up in content.uploads where !readable.contains(up.id) {
+            result.skippedFiles.append("\(up.name)：无法读取文件")
+        }
+        for (i, f) in files.enumerated() {
+            await progress(Progress(phase: .files, done: i, total: files.count))
+            do {
+                let res = try await api.upload(f.data, name: f.up.name, mime: f.up.mime)
+                ids[f.up.id] = res.attachment.id
+                result.files += 1
+            } catch let e as APIError where SyncEngine.refused(e) {
+                result.skippedFiles.append("\(f.up.name)：\(e.localizedDescription)")
+            }
+        }
+        if !files.isEmpty { await progress(Progress(phase: .files, done: files.count, total: files.count)) }
 
         var clock = HLC(node: device)
         var changes: [Change] = []
@@ -96,7 +137,11 @@ public struct LibraryMigrator: Sendable {
                                   hlc: clock.tick(now: now()), baseRev: nil, device: device))
         }
         for n in notes {
-            var fields: [String: JSONValue] = ["title": .string(n.title), "body": .string(n.body), "createdAt": .int(n.createdAt)]
+            var body = n.body
+            for (local, remote) in ids where body.contains(local) {
+                body = body.replacingOccurrences(of: "ivy://res/\(local)", with: "ivy://res/\(remote)")
+            }
+            var fields: [String: JSONValue] = ["title": .string(n.title), "body": .string(body), "createdAt": .int(n.createdAt)]
             if !n.folderId.isEmpty { fields["folderId"] = .string(n.folderId) }
             if !n.tags.isEmpty { fields["tags"] = .array(n.tags.map { .string($0) }) }
             if n.pinned { fields["pinned"] = .bool(true) }
@@ -105,7 +150,6 @@ public struct LibraryMigrator: Sendable {
                                   hlc: clock.tick(now: now()), baseRev: 0, device: device))
         }
 
-        var result = Result()
         var sent = 0
         var notesSent = 0
         let encoder = JSONEncoder()

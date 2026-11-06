@@ -9,7 +9,7 @@ import SQLite3
 /// plain text (guide 8.3); the file is protected by iOS data protection.
 public final class LocalStore {
     enum Table: String, CaseIterable {
-        case notes, folders, tags, attachments, outbox
+        case notes, folders, tags, attachments, outbox, uploads
     }
 
     public struct StoreError: Error, CustomStringConvertible {
@@ -138,6 +138,12 @@ public final class LocalStore {
         let key = "\(account.server.description)|\(account.user.id)"
         let digest = SHA256.hash(data: Data(key.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
         return root.appending(path: "libraries/\(digest)/library.sqlite")
+    }
+
+    /// Where files waiting to be uploaded are kept: next to the database, so
+    /// removing the library removes them too. Nil for an in-memory store.
+    public var filesURL: URL? {
+        url?.deletingLastPathComponent().appending(path: "uploads", directoryHint: .isDirectory)
     }
 
     /// Deletes a library's database and everything next to it.

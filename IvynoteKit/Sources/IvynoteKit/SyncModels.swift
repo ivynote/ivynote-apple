@@ -183,18 +183,45 @@ public struct Tag: Codable, Equatable, Identifiable, Sendable, SyncEntity {
 }
 
 public struct Attachment: Codable, Equatable, Identifiable, Sendable {
+    public enum Kind: String, Sendable { case image, video, audio, file }
+
     public var id: String
     public var name: String
     public var mime: String
     public var kind: String
+    /// Plain bytes.
     public var size: Int64
     public var width: Int?
     public var height: Int?
+    /// Plain SHA-256, hex.
+    public var sha256: String
+    /// `local` or `s3`.
+    public var storage: String
     public var hasThumb: Bool
+    /// Notes that reference it.
+    public var refs: Int
+    public var orphanSince: Millis
+    public var trashedAt: Millis
+    /// `manual` or `orphan`.
+    public var trashReason: String
+    public var `public`: Bool
+    /// Set only for a CDN copy; other public links come from `publish`.
+    public var publicUrl: String
     public var seq: Int64
     public var deleted: Bool
     public var createdAt: Millis
     public var updatedAt: Millis
+
+    public init(id: String, name: String, mime: String, kind: String? = nil, size: Int64, width: Int? = nil, height: Int? = nil,
+                sha256: String = "", storage: String = "", hasThumb: Bool = false, refs: Int = 0, orphanSince: Millis = 0,
+                trashedAt: Millis = 0, trashReason: String = "", public isPublic: Bool = false, publicUrl: String = "", seq: Int64 = 0,
+                deleted: Bool = false, createdAt: Millis, updatedAt: Millis) {
+        self.id = id; self.name = name; self.mime = mime; self.kind = kind ?? Self.kind(of: mime).rawValue
+        self.size = size; self.width = width; self.height = height; self.sha256 = sha256; self.storage = storage
+        self.hasThumb = hasThumb; self.refs = refs; self.orphanSince = orphanSince; self.trashedAt = trashedAt
+        self.trashReason = trashReason; self.public = isPublic; self.publicUrl = publicUrl; self.seq = seq
+        self.deleted = deleted; self.createdAt = createdAt; self.updatedAt = updatedAt
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -205,12 +232,59 @@ public struct Attachment: Codable, Equatable, Identifiable, Sendable {
         size = try c.value(.size, 0)
         width = try c.decodeIfPresent(Int.self, forKey: .width)
         height = try c.decodeIfPresent(Int.self, forKey: .height)
+        sha256 = try c.value(.sha256, "")
+        storage = try c.value(.storage, "")
         hasThumb = try c.value(.hasThumb, false)
+        refs = try c.value(.refs, 0)
+        orphanSince = try c.value(.orphanSince, 0)
+        trashedAt = try c.value(.trashedAt, 0)
+        trashReason = try c.value(.trashReason, "")
+        `public` = try c.value(.public, false)
+        publicUrl = try c.value(.publicUrl, "")
         seq = try c.value(.seq, 0)
         deleted = try c.value(.deleted, false)
         createdAt = try c.value(.createdAt, 0)
         updatedAt = try c.value(.updatedAt, 0)
     }
+
+    public var isTrashed: Bool { trashedAt > 0 }
+    public var isOrphan: Bool { refs == 0 && !isTrashed }
+
+    /// The web client's `kindOf`: what the server would call this MIME type.
+    public static func kind(of mime: String) -> Kind {
+        let m = mime.lowercased()
+        if m.hasPrefix("image/") { return .image }
+        if m.hasPrefix("video/") { return .video }
+        if m.hasPrefix("audio/") { return .audio }
+        return .file
+    }
+
+    /// The Markdown that embeds it (guide 7.1): a link for plain files, an
+    /// embed for media; `[` and `]` are dropped from the name.
+    public static func markdown(id: String, name: String, kind: String) -> String {
+        let label = name.filter { $0 != "[" && $0 != "]" }
+        return "\(kind == Kind.file.rawValue ? "" : "!")[\(label)](ivy://res/\(id))"
+    }
+
+    public var markdown: String { Self.markdown(id: id, name: name, kind: kind) }
+}
+
+/// A file added while the server could not be reached, kept under a `local-`
+/// id until `SyncEngine.flushUploads` sends it (guide 7.2).
+public struct PendingUpload: Codable, Equatable, Identifiable, Sendable {
+    public static let prefix = "local-"
+
+    public var id: String
+    public var name: String
+    public var mime: String
+    /// The copy's file name in the library's uploads folder.
+    public var file: String
+    public var size: Int64
+    public var createdAt: Millis
+    /// Why the server refused it; not tried again until the app restarts.
+    public var failed: String?
+
+    public var kind: String { Attachment.kind(of: mime).rawValue }
 }
 
 // MARK: Wire format

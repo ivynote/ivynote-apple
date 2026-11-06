@@ -1,5 +1,6 @@
 import IvynoteKit
 import SwiftUI
+import UniformTypeIdentifiers
 import WebKit
 
 /// The one note editor web view of a signed-in library. The page loads once;
@@ -20,11 +21,23 @@ final class EditorHost: NSObject {
     /// The body the page has, to skip echoing its own edits back to it.
     @ObservationIgnored private var pageBody = ""
     @ObservationIgnored var onOpenNote: ((_ id: String, _ title: String) -> Void)?
+    /// Files pasted or dropped into the editor.
+    @ObservationIgnored var onFiles: ((_ files: [DroppedFile]) -> Void)?
+    /// Shows documents without editing them (history versions): no changes,
+    /// links or files come back from the page.
+    let readonly: Bool
 
-    init(account: StoredAccount?, engine: SyncEngine) {
+    struct DroppedFile {
+        let name: String
+        let mime: String
+        let data: Data
+    }
+
+    init(account: StoredAccount?, engine: SyncEngine, readonly: Bool = false) {
         self.engine = engine
+        self.readonly = readonly
         let config = WKWebViewConfiguration()
-        let schemes = EditorSchemeHandler(account: account)
+        let schemes = EditorSchemeHandler(account: account) { [weak engine] id in engine?.uploadFile(id) }
         config.setURLSchemeHandler(schemes, forURLScheme: EditorSchemeHandler.scheme)
         config.websiteDataStore = .nonPersistent()
         let content = WKUserContentController()
@@ -61,16 +74,50 @@ final class EditorHost: NSObject {
         let titles: [[String: Any]] = engine.liveNotes
             .sorted { $0.updatedAt > $1.updatedAt }
             .map { ["id": $0.id, "title": $0.title, "folder": engine.folders[$0.folderId]?.name ?? ""] }
+        call("ivy.setTitles(list)", ["list": titles])
+        sendKinds()
+        call("ivy.load(p)", ["p": ["id": note.id, "body": note.body, "readonly": readonly || note.isTrashed, "fontSize": Self.fontSize, "focus": focus] as [String: Any]])
+    }
+
+    /// Shows a body read-only, e.g. a version from the history.
+    func show(_ body: String) {
+        noteID = nil
+        pageBody = body
+        sendKinds()
+        call("ivy.load(p)", ["p": ["id": "", "body": body, "readonly": true, "fontSize": Self.fontSize, "focus": false] as [String: Any]])
+    }
+
+    #if os(iOS)
+    static let fontSize = 17
+    #else
+    static let fontSize = 15
+    #endif
+
+    private func sendKinds() {
+        guard let engine else { return }
         var kinds: [String: String] = [:]
         for a in engine.attachments.values { kinds[a.id] = a.kind }
-        call("ivy.setTitles(list)", ["list": titles])
+        for u in engine.uploads.values { kinds[u.id] = u.kind }
         call("ivy.setKinds(map)", ["map": kinds])
-        #if os(iOS)
-        let size = 17
-        #else
-        let size = 15
-        #endif
-        call("ivy.load(p)", ["p": ["id": note.id, "body": note.body, "readonly": note.isTrashed, "fontSize": size, "focus": focus] as [String: Any]])
+    }
+
+    /// Writes a just-added file into the open note at the cursor, on a line
+    /// of its own (guide 7.1).
+    func insertFile(_ file: AddedFile) {
+        call("ivy.setKind(id, kind)", ["id": file.id, "kind": file.kind])
+        call("ivy.insert(text, true)", ["text": file.markdown])
+    }
+
+    /// The notes linking to the open one, listed below its body.
+    func setBacklinks(_ list: [(id: String, title: String, context: String)]) {
+        call("ivy.setBacklinks(list)", ["list": list.map { ["id": $0.id, "title": $0.title, "context": $0.context] }])
+    }
+
+    /// Markdown rendered as the editor renders it, for copying as rich text.
+    func render(_ markdown: String) async -> String? {
+        guard ready else { return nil }
+        let result = try? await webView.callAsyncJavaScript("return ivy.render(md)", arguments: ["md": markdown], contentWorld: .page)
+        return result as? String
     }
 
     /// The note's body changed outside the editor (pull, merge).
@@ -108,11 +155,25 @@ final class EditorHost: NSObject {
             queued = []
             for (js, args) in q { call(js, args) }
         case "change":
-            guard let id = m["id"] as? String, id == noteID, let text = m["body"] as? String else { return }
+            guard !readonly, let id = m["id"] as? String, id == noteID, let text = m["body"] as? String else { return }
             pageBody = text
             engine?.updateNote(id, .init(body: text))
         case "open":
+            guard !readonly else { return }
             onOpenNote?(m["id"] as? String ?? "", m["title"] as? String ?? "")
+        case "files":
+            guard !readonly, let list = m["files"] as? [[String: Any]] else { return }
+            let files = list.compactMap { f -> DroppedFile? in
+                guard let b64 = f["data"] as? String, let data = Data(base64Encoded: b64) else { return nil }
+                let mime = f["type"] as? String ?? ""
+                var name = f["name"] as? String ?? ""
+                // A pasted image has no name (guide 7.1): image-<time>.<ext>.
+                if name.isEmpty || name == "image.png" && mime.hasPrefix("image/") {
+                    name = DroppedFile.pastedName(mime: mime)
+                }
+                return DroppedFile(name: name, mime: mime, data: data)
+            }
+            if !files.isEmpty { onFiles?(files) }
         case "focus":
             focused = m["focused"] as? Bool ?? false
         case "scroll":
@@ -144,7 +205,7 @@ extension EditorHost: WKNavigationDelegate, WKUIDelegate {
         // The page is gone (memory pressure); load it again and reopen the note.
         ready = false
         webView.load(URLRequest(url: EditorSchemeHandler.pageURL))
-        if let id = noteID, let note = engine?.notes[id] { open(note, focus: false) }
+        if let id = noteID, let note = engine?.notes[id] { open(note, focus: false) } else if readonly { show(pageBody) }
     }
 
     private func openExternally(_ url: URL) {
@@ -154,6 +215,14 @@ extension EditorHost: WKNavigationDelegate, WKUIDelegate {
         #else
         NSWorkspace.shared.open(url)
         #endif
+    }
+}
+
+extension EditorHost.DroppedFile {
+    /// `image-<timestamp>.<ext>`, for pasted images and camera shots.
+    static func pastedName(mime: String, now: Date = Date()) -> String {
+        let ext = UTType(mimeType: mime)?.preferredFilenameExtension ?? "png"
+        return "image-\(Int64(now.timeIntervalSince1970 * 1000)).\(ext)"
     }
 }
 

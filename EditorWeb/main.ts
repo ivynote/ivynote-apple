@@ -1,14 +1,16 @@
 // The note editor of the Apple app: the web client's CodeMirror editor
 // (@ivynote/editor, live preview) in a WKWebView, driven over a small bridge.
 //
-// Swift → JS: window.ivy.load / setBody / setTitles / setKinds / setTheme /
-//             setReadonly / focus / command / scrollToLine
+// Swift → JS: window.ivy.load / setBody / setTitles / setKinds / setKind /
+//             setTheme / setReadonly / focus / command / scrollToLine /
+//             insert / setBacklinks / render
 // JS → Swift: webkit.messageHandlers.ivy.postMessage({ type, ... })
 //   ready              the page can take a document
 //   change {id, body}  the user edited the note
 //   open {id, title}   a wiki link was followed ('' id: no such note)
 //   focus {focused}    the editor gained or lost the keyboard
 //   scroll {line}      the 0-based line at the top of the view (the outline)
+//   files {files}      files pasted or dropped: [{name, type, data (base64)}]
 //   error {message}    an uncaught script error, for the debug log
 
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
@@ -119,6 +121,24 @@ function extensions(readonly: boolean) {
 		livePreview(options),
 		EditorView.contentAttributes.of({ class: 'cm-live' }),
 		roConf.of(EditorState.readOnly.of(readonly)),
+		EditorView.domEventHandlers({
+			paste(e) {
+				const files = [...(e.clipboardData?.files ?? [])];
+				if (!files.length || readOnlyNow()) return false;
+				e.preventDefault();
+				void sendFiles(files);
+				return true;
+			},
+			drop(e, v) {
+				const files = [...(e.dataTransfer?.files ?? [])];
+				if (!files.length || readOnlyNow()) return false;
+				e.preventDefault();
+				const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
+				if (pos != null) v.dispatch({ selection: { anchor: pos } });
+				void sendFiles(files);
+				return true;
+			}
+		}),
 		EditorView.updateListener.of((u) => {
 			if (u.focusChanged) post({ type: 'focus', focused: u.view.hasFocus });
 			if (!u.docChanged) return;
@@ -130,6 +150,64 @@ function extensions(readonly: boolean) {
 }
 
 const host = document.getElementById('editor')!;
+const footer = document.getElementById('footer');
+// The space below the body belongs to it: a tap there writes at the end.
+footer?.addEventListener('click', (e) => {
+	if (e.target === footer && !readOnlyNow()) window.ivy.focus(true);
+});
+
+function readOnlyNow(): boolean {
+	return !view || view.state.readOnly;
+}
+
+/** Hands pasted or dropped files to the app, which uploads them and inserts
+ *  the references (guide 7.1). */
+async function sendFiles(files: File[]) {
+	for (const f of files) {
+		const data = await new Promise<string>((resolve, reject) => {
+			const r = new FileReader();
+			r.onload = () => resolve(String(r.result).replace(/^data:[^,]*,/, ''));
+			r.onerror = () => reject(r.error);
+			r.readAsDataURL(f);
+		}).catch(() => '');
+		if (data) post({ type: 'files', files: [{ name: f.name, type: f.type, data }] });
+	}
+}
+
+interface Backlink {
+	id: string;
+	title: string;
+	context: string;
+}
+
+/** The notes that link here, below the body as on the web (guide 11.3). */
+function renderBacklinks(list: Backlink[]) {
+	if (!footer) return;
+	footer.replaceChildren();
+	if (!list.length) return;
+	const section = document.createElement('section');
+	section.className = 'ivy-backlinks';
+	section.setAttribute('aria-label', '反向链接');
+	const head = document.createElement('div');
+	head.className = 'eyebrow';
+	head.textContent = `${list.length} 条反向链接`;
+	section.append(head);
+	for (const b of list) {
+		const a = document.createElement('button');
+		a.type = 'button';
+		a.className = 'ivy-backlink';
+		const t = document.createElement('span');
+		t.className = 'ivy-backlink-title';
+		t.textContent = b.title || '无标题';
+		const c = document.createElement('span');
+		c.className = 'ivy-backlink-context';
+		c.textContent = b.context || '…';
+		a.append(t, c);
+		a.addEventListener('click', () => post({ type: 'open', id: b.id, title: b.title }));
+		section.append(a);
+	}
+	footer.append(section);
+}
 
 // The page scrolls, not CodeMirror. Report the line at the top of the
 // window, once per frame, so the outline can mark where the reader is.
@@ -164,6 +242,7 @@ window.ivy = {
 		const state = EditorState.create({ doc: p.body, extensions: extensions(!!p.readonly) });
 		if (view) view.setState(state);
 		else view = new EditorView({ state, parent: host });
+		renderBacklinks([]);
 		view.scrollDOM.scrollTop = 0;
 		document.scrollingElement?.scrollTo(0, 0);
 		lastTop = -1;
@@ -203,6 +282,31 @@ window.ivy = {
 
 	setKinds(map: Record<string, string>) {
 		kinds = map;
+	},
+
+	/** A file just added, before its reference goes into the body. */
+	setKind(id: string, kind: string) {
+		kinds[id] = kind;
+	},
+
+	/** Inserts text at the cursor; `block` puts it on a line of its own. */
+	insert(text: string, block = false) {
+		if (!view || view.state.readOnly) return;
+		insertText(view, text, block);
+	},
+
+	setBacklinks(list: Backlink[]) {
+		renderBacklinks(list);
+	},
+
+	/** Markdown as HTML, for copying a note as rich text. */
+	render(md: string): string {
+		return renderMarkdown(md, {
+			resolveResource: (id) => id,
+			resourceKind: (id) => kinds[id],
+			resolveTitle: () => '',
+			noteHref: () => '#'
+		});
 	},
 
 	setTheme(dark: boolean) {

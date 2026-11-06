@@ -10,6 +10,8 @@ public struct SyncState: Equatable, Sendable {
     public var pending = 0
     /// Changes the server refused, kept on this device.
     public var blocked = 0
+    /// Files waiting to be uploaded (guide 7.2).
+    public var uploads = 0
     public var lastSyncAt: Millis = 0
     /// The first sync of this library: nothing downloaded yet.
     public var initial = false
@@ -21,6 +23,26 @@ public struct ConflictNotice: Equatable, Identifiable, Sendable {
     public var id: String { copyID }
     public let noteID: String
     public let copyID: String
+}
+
+/// A queued file the server refused (too large, a type it rejects): it stays
+/// queued, is not sent again until the app restarts, and sync goes on.
+public struct UploadFailure: Equatable, Identifiable, Sendable {
+    public var id: String { uploadID }
+    public let uploadID: String
+    public let name: String
+    public let message: String
+}
+
+/// A file just added to a note: what to write into its body.
+public struct AddedFile: Equatable, Sendable {
+    public let id: String
+    public let name: String
+    public let kind: String
+    /// Queued under a `local-` id because the server could not be reached.
+    public let local: Bool
+
+    public var markdown: String { Attachment.markdown(id: id, name: name, kind: kind) }
 }
 
 /// Local-first sync engine, a port of the web client's
@@ -39,9 +61,13 @@ public final class SyncEngine {
     public private(set) var folders: [String: Folder] = [:]
     public private(set) var tags: [String: Tag] = [:]
     public private(set) var attachments: [String: Attachment] = [:]
+    /// Files added offline (or in a local library), by their `local-` id.
+    public private(set) var uploads: [String: PendingUpload] = [:]
     public private(set) var state = SyncState()
     /// Set when the server answers with a conflict copy; cleared by the UI.
     public var conflict: ConflictNotice?
+    /// Set when the server refuses a queued file; cleared by the UI.
+    public var uploadFailure: UploadFailure?
     public private(set) var cursor: Int64 = 0
 
     public let device: String
@@ -51,6 +77,8 @@ public final class SyncEngine {
 
     @ObservationIgnored var outbox: [String: OutboxEntry] = [:]
     @ObservationIgnored private let store: LocalStore
+    /// Where queued files are kept.
+    @ObservationIgnored private let filesDir: URL
     /// Nil for a local library: edits are only saved, never queued or sent.
     @ObservationIgnored private let transport: SyncTransport?
     @ObservationIgnored private var hlc: HLC
@@ -85,6 +113,8 @@ public final class SyncEngine {
         self.now = now
         self.debounce = debounce
         self.persistDelay = persistDelay
+        filesDir = store.filesURL ?? FileManager.default.temporaryDirectory
+            .appending(path: "ivy-uploads-\(UUID().uuidString)", directoryHint: .isDirectory)
     }
 
     /// Loads the local copy. The first `sync()` then downloads a snapshot.
@@ -93,6 +123,10 @@ public final class SyncEngine {
         for f: Folder in try store.all(.folders) { folders[f.id] = f }
         for t: Tag in try store.all(.tags) { tags[t.id] = t }
         for a: Attachment in try store.all(.attachments) { attachments[a.id] = a }
+        for var u: PendingUpload in try store.all(.uploads) {
+            u.failed = nil // a restart tries refused files again
+            uploads[u.id] = u
+        }
         for var e: OutboxEntry in try store.all(.outbox) {
             // A restart is a new attempt: the clock or the server may have changed.
             e.blocked = nil
@@ -132,6 +166,8 @@ public final class SyncEngine {
         state.status = .syncing
         state.initial = state.lastSyncAt == 0
         do {
+            // First: bodies can only point at a file the server has.
+            try await flushUploads()
             try await push()
             try await pull()
             retryDelay = .seconds(2)
@@ -398,6 +434,7 @@ public final class SyncEngine {
         let blocked = outbox.values.filter { $0.blocked != nil }.count
         state.blocked = blocked
         state.pending = outbox.count - blocked
+        state.uploads = uploads.count
     }
 
     // MARK: Persistence
@@ -589,6 +626,141 @@ public final class SyncEngine {
             dirty.notes.insert(n.id)
         }
         enqueue(.tag, id, [:], delete: true)
+    }
+
+    public func updateTag(_ id: String, name: String? = nil, color: String? = nil) {
+        guard var tag = tags[id] else { return }
+        var fields: [String: JSONValue] = [:]
+        if var v = name?.trimmingCharacters(in: .whitespaces) {
+            while v.hasPrefix("#") { v.removeFirst() }
+            if !v.isEmpty, v != tag.name { tag.name = v; fields["name"] = .string(v) }
+        }
+        if let v = color, v != tag.color { tag.color = v; fields["color"] = .string(v) }
+        guard !fields.isEmpty else { return }
+        tag.updatedAt = now()
+        tags[id] = tag
+        dirty.tags.insert(id)
+        enqueue(.tag, id, fields)
+    }
+
+    /// A live tag with this name, ignoring case and a leading `#`.
+    public func tag(named name: String) -> Tag? {
+        var key = name.trimmingCharacters(in: .whitespaces)
+        while key.hasPrefix("#") { key.removeFirst() }
+        return tags.values.first { $0.name.caseInsensitiveCompare(key) == .orderedSame }
+    }
+
+    // MARK: Attachments (guide 7)
+
+    /// Uploads a file now; when the server cannot be reached (and only then)
+    /// keeps a copy under a `local-` id that the next sync uploads and
+    /// replaces in every body. A local library keeps its files that way.
+    public func addFile(_ data: Data, name: String, mime: String) async throws -> AddedFile {
+        let mime = mime.isEmpty ? "application/octet-stream" : mime
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "file" : name
+        if let transport, !stopped {
+            do {
+                let att = try await transport.uploadFile(data, name: name, mime: mime)
+                putAttachment(att)
+                return AddedFile(id: att.id, name: att.name, kind: att.kind, local: false)
+            } catch let e as APIError {
+                guard case .unreachable = e else { throw e }
+            }
+        }
+        let up = try queueUpload(data, name: name, mime: mime)
+        if transport != nil {
+            state.status = .offline
+            scheduleSync(after: retryDelay)
+        }
+        return AddedFile(id: up.id, name: up.name, kind: up.kind, local: true)
+    }
+
+    private func queueUpload(_ data: Data, name: String, mime: String) throws -> PendingUpload {
+        var id = PendingUpload.prefix + newEntityID()
+        while uploads[id] != nil { id = PendingUpload.prefix + newEntityID() }
+        try FileManager.default.createDirectory(at: filesDir, withIntermediateDirectories: true)
+        let file = id
+        try data.write(to: filesDir.appending(path: file), options: [.atomic])
+        let up = PendingUpload(id: id, name: name, mime: mime, file: file, size: Int64(data.count), createdAt: now())
+        uploads[id] = up
+        try store.put(.uploads, [(id: id, value: up)])
+        updateCounts()
+        return up
+    }
+
+    /// Uploads queued files, oldest first, and points the notes that use
+    /// them at the server's ids (guide 7.2). Network errors, 5xx, 401, 408
+    /// and 429 end the round; any other refusal sets that file aside.
+    func flushUploads() async throws {
+        guard let transport else { return }
+        for up in uploads.values.sorted(by: { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }) where up.failed == nil {
+            guard !stopped else { return }
+            let file = filesDir.appending(path: up.file)
+            let att: Attachment
+            do {
+                let data = try Data(contentsOf: file)
+                att = try await transport.uploadFile(data, name: up.name, mime: up.mime)
+            } catch let e as APIError where !Self.refused(e) {
+                throw e
+            } catch {
+                let message = (error as? APIError)?.localizedDescription ?? "无法读取文件"
+                uploads[up.id]?.failed = message
+                uploadFailure = UploadFailure(uploadID: up.id, name: up.name, message: message)
+                continue
+            }
+            guard uploads[up.id] != nil else { continue }
+            putAttachment(att)
+            let old = "ivy://res/\(up.id)"
+            for n in notes.values where n.body.contains(old) {
+                updateNote(n.id, .init(body: n.body.replacingOccurrences(of: old, with: "ivy://res/\(att.id)")))
+            }
+            // The bodies must reach the disk before the file leaves it.
+            persistNow()
+            uploads[up.id] = nil
+            try? store.delete(.uploads, [up.id])
+            try? FileManager.default.removeItem(at: file)
+            updateCounts()
+        }
+    }
+
+    /// The server answered that sending the same file again is pointless.
+    nonisolated static func refused(_ e: APIError) -> Bool {
+        guard let s = e.status else { return false }
+        return (400..<500).contains(s) && ![401, 408, 429].contains(s)
+    }
+
+    /// The copy of a queued file, to show it before it is uploaded.
+    public func uploadFile(_ id: String) -> (url: URL, mime: String)? {
+        guard let up = uploads[id] else { return nil }
+        return (filesDir.appending(path: up.file), up.mime)
+    }
+
+    /// Records an attachment's metadata, e.g. after an upload or a change
+    /// made in the media library; the next pull confirms it.
+    public func putAttachment(_ a: Attachment) {
+        if a.deleted { return removeAttachment(a.id) }
+        attachments[a.id] = a
+        try? store.put(.attachments, [(id: a.id, value: a)])
+    }
+
+    public func removeAttachment(_ id: String) {
+        guard attachments.removeValue(forKey: id) != nil else { return }
+        try? store.delete(.attachments, [id])
+    }
+
+    /// `image`, `video`, `audio` or `file`, for uploaded and queued files.
+    public func attachmentKind(_ id: String) -> String? {
+        attachments[id]?.kind ?? uploads[id]?.kind
+    }
+
+    /// Sends refused files again, e.g. after the user freed some space.
+    public func retryFailedUploads() {
+        var any = false
+        for id in uploads.keys where uploads[id]?.failed != nil {
+            uploads[id]?.failed = nil
+            any = true
+        }
+        if any { scheduleSync(after: .zero) }
     }
 
     // MARK: Queries

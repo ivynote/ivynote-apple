@@ -17,22 +17,30 @@ final class EditorSchemeHandler: NSObject, WKURLSchemeHandler {
     private let root: URL?
     /// Nil in a local library, which has no server to fetch attachments from.
     private let account: StoredAccount?
+    /// The copy of a file waiting to be uploaded (`local-` ids).
+    private let localFile: @MainActor (String) -> (url: URL, mime: String)?
     private let session: URLSession
     private var running: [ObjectIdentifier: Task<Void, Never>] = [:]
 
-    init(account: StoredAccount?) {
+    init(account: StoredAccount?, localFile: @escaping @MainActor (String) -> (url: URL, mime: String)? = { _ in nil }) {
         self.account = account
+        self.localFile = localFile
         root = Bundle.main.url(forResource: "Editor", withExtension: nil)
+        session = Self.mediaSession
+    }
+
+    /// Attachments never change under the same id: keep them for offline
+    /// reading and answer from the cache without asking again. One session
+    /// for the editor and the media library, so both share the cache.
+    static let mediaSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.httpCookieStorage = nil
         config.httpShouldSetCookies = false
-        // Attachments never change under the same id: keep them for offline
-        // reading and answer from the cache without asking again.
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appending(path: "ivy-media")
         config.urlCache = URLCache(memoryCapacity: 32 << 20, diskCapacity: 512 << 20, directory: dir)
         config.requestCachePolicy = .returnCacheDataElseLoad
-        session = URLSession(configuration: config)
-    }
+        return URLSession(configuration: config)
+    }()
 
     func webView(_ webView: WKWebView, start task: any WKURLSchemeTask) {
         guard let url = task.request.url else { return fail(task, URLError(.badURL)) }
@@ -63,6 +71,13 @@ final class EditorSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     private func fetchAttachment(id: String, thumb: Bool, task: any WKURLSchemeTask) {
+        // Not uploaded yet: shown from this device (guide 7.2).
+        if id.hasPrefix(PendingUpload.prefix) {
+            guard let file = localFile(id), let data = try? Data(contentsOf: file.url) else {
+                return respond(task, status: 404, headers: [:], data: Data())
+            }
+            return respondLocal(task, data: data, mime: file.mime)
+        }
         guard let account, id.wholeMatch(of: /[A-Za-z0-9_-]{8,64}/) != nil else {
             return respond(task, status: 404, headers: [:], data: Data())
         }
@@ -94,6 +109,27 @@ final class EditorSchemeHandler: NSObject, WKURLSchemeHandler {
                 self.fail(task, error)
             }
         }
+    }
+
+    /// A local file, honouring a byte range: video and audio seek with them.
+    private func respondLocal(_ task: any WKURLSchemeTask, data: Data, mime: String) {
+        var headers = ["Content-Type": mime, "Accept-Ranges": "bytes"]
+        if let range = task.request.value(forHTTPHeaderField: "Range"),
+           let m = range.wholeMatch(of: /bytes=(\d*)-(\d*)/), !data.isEmpty {
+            let count = data.count
+            var start = Int(m.1) ?? 0
+            var end = Int(m.2) ?? (count - 1)
+            if m.1.isEmpty, let suffix = Int(m.2) { start = max(0, count - suffix); end = count - 1 }
+            end = min(end, count - 1)
+            guard start <= end else {
+                return respond(task, status: 416, headers: ["Content-Range": "bytes */\(count)"], data: Data())
+            }
+            headers["Content-Range"] = "bytes \(start)-\(end)/\(count)"
+            headers["Content-Length"] = "\(end - start + 1)"
+            return respond(task, status: 206, headers: headers, data: data.subdata(in: start..<(end + 1)))
+        }
+        headers["Content-Length"] = "\(data.count)"
+        respond(task, status: 200, headers: headers, data: data)
     }
 
     private func respond(_ task: any WKURLSchemeTask, status: Int, headers: [String: String], data: Data) {

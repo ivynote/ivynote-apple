@@ -141,6 +141,16 @@ struct CloudSignInView: View {
             #endif
         }
         .task {
+            // The website may have moved an official node (e.g. a temporary domain):
+            // give it a moment to answer, else go on with the last known address.
+            let refresh = Task { await RegionDirectory.shared.refresh() }
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { await refresh.value }
+                group.addTask { try? await Task.sleep(for: .milliseconds(1500)) }
+                await group.next()
+                group.cancelAll()
+            }
+            if !chosen, let r = region, r.server != server { server = r.server }
             // The App Store country decides which payments work, so it picks the node when known.
             if !chosen, let storefront = await Storefront.current?.countryCode {
                 let preferred = SyncRegion.preferred(storefront: storefront, region: nil).server

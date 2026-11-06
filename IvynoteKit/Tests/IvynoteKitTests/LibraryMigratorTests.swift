@@ -19,6 +19,31 @@ import Testing
         #expect(SyncRegion.of(try ServerAddress(parsing: "notes.example.com")) == nil)
         #expect(SyncRegion.of(nil) == nil)
     }
+
+    @Test func takesAddressesFromTheWebsite() throws {
+        let defaults = UserDefaults(suiteName: "regions-\(UUID().uuidString)")!
+        let dir = RegionDirectory(defaults: defaults)
+        let temp = try ServerAddress(parsing: "https://temp.example.com")
+        #expect(dir.server(for: .cn) == SyncRegion.cn.builtInServer)
+
+        #expect(dir.apply(Data(#"{"regions":[{"id":"cn","url":"https://Temp.Example.com/"},{"id":"mars","url":"https://mars.example"}]}"#.utf8)))
+        #expect(dir.server(for: .cn) == temp)
+        #expect(dir.server(for: .global) == SyncRegion.global.builtInServer)
+        #expect(dir.region(of: temp) == .cn)
+        #expect(dir.region(of: SyncRegion.cn.builtInServer) == .cn)
+        // Kept for the next start.
+        #expect(RegionDirectory(defaults: defaults).server(for: .cn) == temp)
+
+        // Back to the filed domain: the temporary one, listed as an alias, stays official.
+        #expect(dir.apply(Data(#"{"regions":[{"id":"cn","url":"https://web.ivynote.net","aliases":["https://temp.example.com"]}]}"#.utf8)))
+        #expect(dir.server(for: .cn) == SyncRegion.cn.builtInServer)
+        #expect(dir.region(of: temp) == .cn)
+
+        // Unusable answers change nothing.
+        #expect(!dir.apply(Data(#"{"regions":[{"id":"cn","url":"http://insecure.example"}]}"#.utf8)))
+        #expect(!dir.apply(Data("nope".utf8)))
+        #expect(dir.server(for: .cn) == SyncRegion.cn.builtInServer)
+    }
 }
 
 @Suite struct LibraryMigratorTests {

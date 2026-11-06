@@ -38,3 +38,57 @@ body {
 .ivy-editor .cm-table td {
 	min-width: 5em;
 }
+/* Backlinks right below the body (guide 11.3), then the room to scroll the
+   last line up from the bottom edge, which the editor keeps itself on the
+   web. */
+.ivy-editor .cm-editor .cm-content {
+	padding-bottom: 24px !important;
+}
+#footer {
+	padding: 0 var(--gutter) 40vh;
+	cursor: text;
+}
+@media (min-width: 700px) {
+	#footer {
+		max-width: 760px;
+		margin: 0 auto;
+	}
+}
+.ivy-backlinks {
+	margin-top: 24px;
+	padding-top: 16px;
+	border-top: 1px solid rgb(var(--line));
+}
+.ivy-backlinks .eyebrow {
+	margin-bottom: 8px;
+}
+.ivy-backlink {
+	display: block;
+	width: calc(100% + 24px);
+	margin: 0 -12px;
+	padding: 8px 12px;
+	border: 0;
+	border-radius: 12px;
+	background: transparent;
+	color: rgb(var(--ink));
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.ivy-backlink:active,
+.ivy-backlink:hover {
+	background: rgb(var(--sunken) / 0.6);
+}
+.ivy-backlink-title {
+	display: block;
+	font-size: 14px;
+	font-weight: 500;
+}
+.ivy-backlink-context {
+	display: block;
+	overflow: hidden;
+	color: rgb(var(--muted));
+	font-size: 13px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}

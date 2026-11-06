@@ -14,6 +14,16 @@ final class FakeSync: SyncTransport, @unchecked Sendable {
     }
     private(set) var pushed: [[Change]] = []
     private(set) var calls: [String] = []
+    var uploadHandler: @Sendable (Data, String, String) throws -> Attachment = { data, name, mime in
+        Attachment(id: "srv" + String(name.filter(\.isLetter).prefix(8)).padding(toLength: 8, withPad: "x", startingAt: 0),
+                   name: name, mime: mime, size: Int64(data.count), createdAt: 1, updatedAt: 1)
+    }
+    private(set) var uploaded: [String] = []
+
+    func uploadFile(_ data: Data, name: String, mime: String) async throws -> Attachment {
+        let handler = lock.withLock { uploaded.append(name); calls.append("upload:\(name)"); return uploadHandler }
+        return try handler(data, name, mime)
+    }
 
     func snapshot() async throws -> PullResponse {
         lock.withLock { calls.append("snapshot"); return snapshots.isEmpty ? PullResponse(seq: 0) : snapshots.removeFirst() }

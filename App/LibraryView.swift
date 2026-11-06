@@ -14,12 +14,13 @@ struct LibraryView: View {
     @State private var selection: String?
     @State private var expanded: Set<String> = []
     @State private var showAccount = false
+    @State private var showMedia = false
 
     private var selectedNote: String? { selection.flatMap(noteID(fromKey:)) }
 
     var body: some View {
         NavigationSplitView {
-            ShelfView(selection: $selection, expanded: $expanded, showAccount: $showAccount, reveal: reveal)
+            ShelfView(selection: $selection, expanded: $expanded, showAccount: $showAccount, showMedia: $showMedia, reveal: reveal)
                 .navigationTitle(library.ref.name)
                 #if os(iOS)
                 // The header row names the library, so the bar stays quiet:
@@ -40,6 +41,13 @@ struct LibraryView: View {
             }
         }
         .sheet(isPresented: $showAccount) { AccountView() }
+        .sheet(isPresented: $showMedia) { MediaLibraryView(openNote: reveal) }
+        .alert("文件未能上传", isPresented: Binding(get: { engine.uploadFailure != nil }, set: { if !$0 { engine.uploadFailure = nil } }),
+               presenting: engine.uploadFailure) { _ in
+            Button("好", role: .cancel) { engine.uploadFailure = nil }
+        } message: { f in
+            Text("「\(f.name)」被服务器拒绝：\(f.message)。它会留在本机，下次启动时再试；其他内容照常同步。")
+        }
         .alert("内容冲突", isPresented: Binding(get: { engine.conflict != nil }, set: { if !$0 { engine.conflict = nil } }), presenting: engine.conflict) { c in
             Button("打开副本") {
                 reveal(c.copyID)
@@ -118,6 +126,7 @@ struct ShelfView: View {
     @Binding var selection: String?
     @Binding var expanded: Set<String>
     @Binding var showAccount: Bool
+    @Binding var showMedia: Bool
     let reveal: (String) -> Void
 
     @AppStorage("ivy.shelf.sort") private var sortBy: Shelf.SortBy = .updated
@@ -128,13 +137,14 @@ struct ShelfView: View {
     @State private var deleting: Folder?
     @State private var confirmEmpty = false
     @State private var nameDraft = ""
+    @State private var editingTag: Tag?
 
     var body: some View {
         List(selection: $selection) {
             // The library heads the shelf: what it is, how its sync stands,
             // and (as a menu) the way to another one.
             Section {
-                LibraryHeader(showAccount: $showAccount)
+                LibraryHeader(showAccount: $showAccount, showMedia: $showMedia)
                     .selectionDisabled()
                     .listRowInsets(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
                     .listRowSeparator(.hidden)
@@ -190,6 +200,7 @@ struct ShelfView: View {
         } message: { _ in
             Text("子笔记本会一起删除，其中的笔记移到回收站。")
         }
+        .sheet(item: $editingTag) { tag in TagEditor(tagID: tag.id) }
         .confirmationDialog("永久删除回收站中的全部笔记？", isPresented: $confirmEmpty) {
             Button("清空回收站", role: .destructive) {
                 if let id = selection.flatMap(noteID(fromKey:)), engine.notes[id]?.isTrashed == true { selection = nil }
@@ -275,6 +286,10 @@ struct ShelfView: View {
             }
         case .note:
             if let n = row.note { NoteMenu(note: n, selection: $selection) }
+        case .tag:
+            if let t = row.tag {
+                Button("编辑标签…", systemImage: "pencil") { editingTag = t }
+            }
         case .group where row.key == Shelf.trashKey && row.count > 0:
             Button("清空回收站", systemImage: "trash.slash", role: .destructive) { confirmEmpty = true }
         case .heading:
@@ -586,6 +601,7 @@ struct LibraryHeader: View {
     @Environment(LibraryCatalog.self) private var catalog
     @Environment(Library.self) private var library
     @Binding var showAccount: Bool
+    @Binding var showMedia: Bool
 
     var body: some View {
         Menu {
@@ -604,6 +620,7 @@ struct LibraryHeader: View {
             }
             Section {
                 if !library.ref.isLocal {
+                    Button("媒体库…", systemImage: "photo.on.rectangle.angled") { showMedia = true }
                     Button("账户与同步…", systemImage: "person.crop.circle") { showAccount = true }
                 } else if catalog.library(library.ref.id)?.canTurnOnSync == true {
                     Button("开启多端同步…", systemImage: "icloud.and.arrow.up") { catalog.turnOnSync(library.ref.id) }
@@ -676,6 +693,9 @@ struct SyncStatusView: View {
             }
             if s.blocked > 0 {
                 Text("\(s.blocked) 条更改被服务器拒绝").foregroundStyle(.orange)
+            }
+            if s.uploads > 0 && !engine.isLocal {
+                Text("\(s.uploads) 个文件待上传")
             }
         }
         .font(.footnote)

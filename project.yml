@@ -59,6 +59,8 @@ targets:
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         NSLocalNetworkUsageDescription: 连接局域网内自托管的常青笔记服务器。
+        # Taking a photo straight into a note (guide 3.2).
+        NSCameraUsageDescription: 拍照并插入到笔记中。
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.ivynote

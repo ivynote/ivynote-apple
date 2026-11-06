@@ -14,7 +14,8 @@ public final class Library {
     public let account: StoredAccount?
     public private(set) var loadError: String?
 
-    @ObservationIgnored private let api: APIClient?
+    /// The REST API with the account's token; nil for a local library.
+    @ObservationIgnored public let api: APIClient?
     @ObservationIgnored private let storeURL: URL?
     @ObservationIgnored private var events: Task<Void, Never>?
     @ObservationIgnored private var monitor: NWPathMonitor?

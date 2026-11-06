@@ -114,15 +114,23 @@ public struct APIClient: Sendable {
     }
 
     func send<T: Decodable>(_ method: String, _ path: String, body: (any Encodable)? = nil) async throws -> T {
-        let req = try request(method, path, body: body)
+        let data = try await perform(try request(method, path, body: body))
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            throw APIError.invalidResponse
+        }
+    }
+
+    /// Sends a request and returns the body of a 2xx answer; maps every
+    /// failure to an `APIError`.
+    func perform(_ req: URLRequest) async throws -> Data {
         let data: Data
         let response: HTTPURLResponse
         do {
             (data, response) = try await transport.send(req)
         } catch let error as APIError {
             throw error
-        } catch let error as URLError {
-            throw APIError.unreachable(error.localizedDescription)
         } catch {
             throw APIError.unreachable(error.localizedDescription)
         }
@@ -130,11 +138,7 @@ public struct APIClient: Sendable {
             let message = (try? JSONDecoder().decode(ErrorBody.self, from: data))?.error ?? ""
             throw APIError.server(status: response.statusCode, message: message)
         }
-        do {
-            return try JSONDecoder().decode(T.self, from: data)
-        } catch {
-            throw APIError.invalidResponse
-        }
+        return data
     }
 
     static let userAgent: String = {

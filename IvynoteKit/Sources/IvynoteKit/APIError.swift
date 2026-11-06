@@ -28,6 +28,7 @@ public enum APIError: Error, Equatable, LocalizedError {
         switch self {
         case .server(let status, let message):
             switch status {
+            case 413: "文件超过服务器的上传上限"
             case 429: "尝试次数过多，请 15 分钟后再试"
             case 500...: "服务器暂时不可用（\(status)）"
             default: message.isEmpty ? "请求失败（\(status)）" : message

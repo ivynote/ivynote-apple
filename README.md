@@ -61,7 +61,9 @@ EditorWeb/build.sh               # after changing EditorWeb/ or pulling ivynote
 
 The page is served from the app bundle under `ivyapp://editor/`; attachments
 (`ivy://res/<id>`) load from `ivyapp://editor/res/<id>`, which the app fetches
-with the account's token and caches on disk. Swift talks to the page through
+with the account's token and caches on disk (files not uploaded yet are read
+from the library's folder). Pasted and dropped files come back to Swift, which
+uploads them and inserts the reference; backlinks are listed below the body. Swift talks to the page through
 `window.ivy` (see `EditorWeb/main.ts`); the page reports edits, link taps and
 focus back.
 
@@ -89,8 +91,10 @@ xcrun simctl launch booted app.ivynote -ivyOpenNote "Some title"
 2. ~~Local store (SQLite) and sync engine: HLC, outbox, push/pull, SSE (guide ch. 6)~~
    `SyncEngine` is a port of the web client's `packages/core/src/sync/engine.ts`;
    keep the two in step when the protocol changes.
-3. ~~Library tree, note list, editor with live preview (the web's CodeMirror)~~;
-   next: tags editing, faster list for large libraries
-4. Attachments, offline upload queue
-5. Search, `[[wiki links]]`, backlinks
-6. Online features: history, sharing, media library, settings
+3. ~~Library tree, note list, editor with live preview (the web's CodeMirror)~~,
+   ~~tags editing~~; next: faster list for large libraries
+4. ~~Attachments, offline upload queue~~ (guide ch. 7): photos, camera, files,
+   paste and drop; offline files wait under `local-` ids in the library's
+   `uploads/` folder and are uploaded before each push
+5. Search, `[[wiki links]]`, ~~backlinks~~ (computed locally, `Links`)
+6. ~~History, sharing, media library~~; next: settings

@@ -350,8 +350,9 @@ struct CloudSignInView: View {
             let content = try LibraryMigrator.Content.read(from: catalog.storeURL(for: local.id))
             let migrator = LibraryMigrator(api: APIClient(server: account.server, token: account.token), device: Library.deviceID())
             let result = try await migrator.run(content) { p in await state.update(p) }
-            if !result.rejected.isEmpty {
-                state.error = "\(result.rejected.count) 项未能迁移，原内容仍保留在本地笔记库中。"
+            let missed = result.rejected.count + result.skippedFiles.count
+            if missed > 0 {
+                state.error = "\(missed) 项未能迁移，原内容仍保留在本地笔记库中。"
             }
             let ref = try catalog.createSignedIn(account.server, name: libraryName, token: account.token, user: account.user)
             catalog.markMigrated(local.id, to: ref.id)
@@ -379,6 +380,7 @@ final class MigrationState {
         guard let p = progress else { return "正在准备…" }
         switch p.phase {
         case .check: return "正在准备…"
+        case .files: return "正在上传附件 \(p.done)/\(p.total)"
         case .notes: return "正在上传笔记 \(p.done)/\(p.total)"
         case .done: return "迁移完成，正在打开…"
         }
@@ -388,7 +390,9 @@ final class MigrationState {
         guard let p = progress else { return 0 }
         switch p.phase {
         case .check: return 0.02
-        case .notes: return p.total > 0 ? Double(p.done) / Double(p.total) : 1
+        // Files first, then notes: each takes about half the bar.
+        case .files: return 0.02 + 0.48 * (p.total > 0 ? Double(p.done) / Double(p.total) : 1)
+        case .notes: return 0.5 + 0.5 * (p.total > 0 ? Double(p.done) / Double(p.total) : 1)
         case .done: return 1
         }
     }

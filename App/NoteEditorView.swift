@@ -7,11 +7,16 @@ import SwiftUI
 struct NoteEditorView: View {
     @Environment(SyncEngine.self) private var engine
     @Environment(EditorHost.self) private var host
+    @Environment(Library.self) private var library
     @Environment(\.colorScheme) private var colorScheme
     let noteID: String
 
     @State private var renaming = false
     @State private var titleDraft = ""
+    @State private var pickers = AttachmentPickerState()
+    @State private var inserter = AttachmentInserter()
+    @State private var sharing = false
+    @State private var showHistory = false
 
     var body: some View {
         if let note = engine.notes[noteID] {
@@ -26,15 +31,20 @@ struct NoteEditorView: View {
                     .padding(12)
                     .background(.orange.opacity(0.12))
                 }
+                NoteMetaBar(note: note, uploading: inserter.busy)
                 MarkdownEditor(host: host)
             }
             // The page's --surface, so the title and the body are one sheet.
             .background(colorScheme == .dark ? Color(red: 25 / 255, green: 27 / 255, blue: 30 / 255) : .white)
             #if os(iOS)
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if host.focused && !note.isTrashed { FormatBar(host: host) }
+                if host.focused && !note.isTrashed { FormatBar(host: host, pickers: $pickers) }
             }
             #endif
+            .modifier(AttachmentPickers(state: $pickers) { files in add(files) })
+            .overlay(alignment: .bottom) { NoticeToast(text: $inserter.notice) }
+            .sheet(isPresented: $sharing) { ShareView(noteID: noteID) }
+            .sheet(isPresented: $showHistory) { HistoryView(noteID: noteID) }
             // One title, in the bar: editable there unless the note is in the trash.
             .navigationTitle(displayTitle(note))
             #if os(iOS)
@@ -56,11 +66,17 @@ struct NoteEditorView: View {
             .modifier(NoteOutline(text: note.body))
             .toolbar {
                 if !note.isTrashed {
+                    InsertMenu(pickers: $pickers)
+                    Button("分享", systemImage: "square.and.arrow.up") { sharing = true }
+                        .help("分享与导出")
                     Menu("更多", systemImage: "ellipsis.circle") {
                         Button(note.pinned ? "取消置顶" : "置顶", systemImage: note.pinned ? "pin.slash" : "pin") {
                             engine.updateNote(noteID, .init(pinned: !note.pinned))
                         }
                         MoveToFolderMenu(note: note)
+                        if !library.ref.isLocal {
+                            Button("历史版本", systemImage: "clock.arrow.circlepath") { showHistory = true }
+                        }
                         Divider()
                         Button("移到回收站", systemImage: "trash", role: .destructive) {
                             engine.updateNote(noteID, .init(trashed: true))
@@ -71,11 +87,36 @@ struct NoteEditorView: View {
             .onAppear {
                 host.setTheme(dark: colorScheme == .dark)
                 host.open(note, focus: note.body.isEmpty && note.title.isEmpty && !note.isTrashed)
+                let inserter = inserter, engine = engine, host = host, id = noteID
+                host.onFiles = { [weak host] files in
+                    guard let host else { return }
+                    inserter.add(files.map { .init(name: $0.name, mime: $0.mime, data: $0.data) }, to: id, engine: engine, host: host)
+                }
+            }
+            // Backlinks change with this title and with other notes, which
+            // change here by sync (or while this note is not open).
+            .task(id: BacklinkKey(title: note.title, trashed: note.isTrashed, cursor: engine.cursor, count: engine.notes.count)) {
+                guard !note.isTrashed else { return host.setBacklinks([]) }
+                let links = Links.backlinks(to: noteID, in: engine.notes.values)
+                host.setBacklinks(links.map { n in
+                    (id: n.id, title: displayTitle(n), context: Links.context(in: n.body, linkingTo: note.title, noteID: noteID))
+                })
             }
             .onChange(of: note.body) { _, body in host.bodyChanged(noteID, body) }
             .onChange(of: note.isTrashed) { _, trashed in host.setReadonly(trashed) }
             .onChange(of: colorScheme) { _, scheme in host.setTheme(dark: scheme == .dark) }
         }
+    }
+
+    private func add(_ files: [AttachmentInserter.File]) {
+        inserter.add(files, to: noteID, engine: engine, host: host)
+    }
+
+    private struct BacklinkKey: Equatable {
+        let title: String
+        let trashed: Bool
+        let cursor: Int64
+        let count: Int
     }
 
     private func rename() {
@@ -291,6 +332,7 @@ private struct OutlineRow: View {
 /// The phone's insert bar (guide 3.2): formatting the soft keyboard lacks.
 struct FormatBar: View {
     let host: EditorHost
+    @Binding var pickers: AttachmentPickerState
 
     private let items: [(String, String, String)] = [
         ("h1", "number", "标题"),
@@ -316,6 +358,15 @@ struct FormatBar: View {
                         }
                         .accessibilityLabel(item.2)
                     }
+                    // Files (guide 3.2): photos, the camera, any file.
+                    Button { pickers.photos = true } label: { Image(systemName: "photo").frame(width: 40, height: 40) }
+                        .accessibilityLabel("图片")
+                    if AttachmentPickerState.cameraAvailable {
+                        Button { pickers.camera = true } label: { Image(systemName: "camera").frame(width: 40, height: 40) }
+                            .accessibilityLabel("拍照")
+                    }
+                    Button { pickers.files = true } label: { Image(systemName: "paperclip").frame(width: 40, height: 40) }
+                        .accessibilityLabel("附件")
                 }
                 .padding(.horizontal, 6)
             }

@@ -605,6 +605,8 @@ struct LibraryHeader: View {
             Section {
                 if !library.ref.isLocal {
                     Button("账户与同步…", systemImage: "person.crop.circle") { showAccount = true }
+                } else if catalog.library(library.ref.id)?.canTurnOnSync == true {
+                    Button("开启多端同步…", systemImage: "icloud.and.arrow.up") { catalog.turnOnSync(library.ref.id) }
                 }
                 Button("管理笔记库…", systemImage: "books.vertical") { catalog.open(nil) }
             }
@@ -644,7 +646,8 @@ struct SyncStatusView: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 if engine.isLocal {
-                    Text("本地笔记库 · 仅保存在本机")
+                    Image(systemName: "icloud.slash")
+                    Text("仅保存在本机 · 未同步")
                 } else {
                 switch s.status {
                 case .syncing:

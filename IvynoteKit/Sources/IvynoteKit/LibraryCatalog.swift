@@ -10,8 +10,11 @@ private let log = Logger(subsystem: "app.ivynote", category: "libraries")
 /// A library is one independent collection of notes: `local` lives only on
 /// this device (no account, no sync), `server` syncs with one Ivynote server.
 /// Each has its own database and its own sign-in, so switching never mixes
-/// data. The kind is fixed at creation: a local library never becomes a
-/// synced one, which could merge two histories of the same notes.
+/// data. The kind is fixed at creation. A local library can still move to
+/// the cloud, but only into a newly registered, empty account: its content
+/// is copied into a new synced library (`LibraryMigrator`), so two histories
+/// of the same notes are never merged. The local one stays, marked with
+/// where it went, until the person removes it.
 public struct LibraryRef: Codable, Equatable, Identifiable, Sendable {
     public enum Kind: String, Codable, Sendable { case local, server }
 
@@ -26,8 +29,12 @@ public struct LibraryRef: Codable, Equatable, Identifiable, Sendable {
     public var userID: String?
     public let createdAt: Millis
     public var openedAt: Millis
+    /// A local library copied to the cloud: the synced library that holds it now.
+    public var migratedTo: String?
 
     public var isLocal: Bool { kind == .local }
+    /// A local library that can still turn on sync.
+    public var canTurnOnSync: Bool { kind == .local && migratedTo == nil }
 }
 
 /// The libraries on this device and which one is open. The list lives in
@@ -37,6 +44,9 @@ public struct LibraryRef: Codable, Equatable, Identifiable, Sendable {
 public final class LibraryCatalog {
     public private(set) var libraries: [LibraryRef] = []
     public private(set) var activeID: String?
+    /// A local library whose "Turn on sync" was chosen from inside it: the
+    /// library list opens the sign-up for it once the library has closed.
+    public var pendingSync: String?
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let root: URL
@@ -85,6 +95,28 @@ public final class LibraryCatalog {
     public func createServer(_ server: ServerAddress, name: String) -> LibraryRef {
         add(LibraryRef(id: Self.newID(), kind: .server, name: clean(name, or: server.host), server: server,
                        account: nil, userID: nil, createdAt: now(), openedAt: now()))
+    }
+
+    /// Adds a synced library for an account that has already signed in, so
+    /// no library exists for a server nobody could sign in to. Opens it.
+    @discardableResult
+    public func createSignedIn(_ server: ServerAddress, name: String, token: String, user: User) throws -> LibraryRef {
+        let ref = LibraryRef(id: Self.newID(), kind: .server, name: clean(name, or: server.host), server: server,
+                             account: user.username, userID: user.id, createdAt: now(), openedAt: now())
+        try credentials(for: ref.id).save(StoredAccount(server: server, token: token, user: user))
+        return add(ref)
+    }
+
+    /// Records that a local library was copied into the synced library `target`.
+    public func markMigrated(_ id: String, to target: String) {
+        update(id) { if $0.isLocal { $0.migratedTo = target } }
+    }
+
+    /// Leaves an open local library to turn on sync for it from the list.
+    public func turnOnSync(_ id: String) {
+        guard library(id)?.canTurnOnSync == true else { return }
+        pendingSync = id
+        open(nil)
     }
 
     /// Opens a library; nil goes back to the list.

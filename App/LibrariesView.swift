@@ -1,8 +1,9 @@
 import IvynoteKit
 import SwiftUI
 
-/// The libraries on this device, as on the desktop client: open one, create
-/// a local one, or connect a server as a synced one.
+/// The libraries on this device, as on the desktop client. Cloud sync leads:
+/// sign in or sign up (the library is created once the account exists);
+/// a local library is the quiet alternative and can turn on sync later.
 struct LibrariesView: View {
     @Environment(LibraryCatalog.self) private var catalog
     @State private var path: [Route] = []
@@ -11,7 +12,10 @@ struct LibrariesView: View {
     @State private var removing: LibraryRef?
     @State private var nameDraft = ""
 
-    enum Route: Hashable { case connect }
+    enum Route: Hashable {
+        case cloud
+        case turnOnSync(String)
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -23,7 +27,7 @@ struct LibrariesView: View {
                             .frame(width: 64, height: 64)
                             .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                         Text(catalog.libraries.isEmpty ? "常青笔记" : "笔记库").font(.title2.weight(.semibold))
-                        Text(catalog.libraries.isEmpty ? "本地优先的 Markdown 笔记。先创建或接入一个笔记库。" : "选择要打开的笔记库")
+                        Text(catalog.libraries.isEmpty ? "本地优先的 Markdown 笔记，在手机、电脑和网页间同步。" : "选择要打开的笔记库")
                             .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
@@ -41,35 +45,79 @@ struct LibrariesView: View {
                                     Button("移除", systemImage: "trash", role: .destructive) { removing = ref }
                                     Button("重命名", systemImage: "pencil") { startRename(ref) }
                                 }
+                                .swipeActions(edge: .leading) {
+                                    if ref.canTurnOnSync {
+                                        Button("开启同步", systemImage: "icloud.and.arrow.up") { path.append(.turnOnSync(ref.id)) }
+                                            .tint(.accentColor)
+                                    }
+                                }
                         }
                     }
                 }
 
-                Section {
-                    Button {
-                        nameDraft = catalog.libraries.isEmpty ? "我的笔记" : ""
-                        creatingLocal = true
-                    } label: {
-                        ActionRow(icon: "plus", tint: .secondary, title: "新建本地笔记库", detail: "只保存在这台设备，无需账户，立即可用")
+                if catalog.libraries.isEmpty {
+                    // First run: syncing is the way in; local is the quiet alternative.
+                    Section {
+                        NavigationLink(value: Route.cloud) {
+                            HStack(spacing: 12) {
+                                Image(systemName: "icloud")
+                                    .font(.system(size: 18, weight: .medium))
+                                    .frame(width: 40, height: 40)
+                                    .background(.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("开始使用 · 多端同步").font(.body.weight(.semibold))
+                                    Text("登录或注册，笔记在手机、电脑和网页间自动同步").font(.footnote).opacity(0.85)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .foregroundStyle(.white)
+                            .padding(.vertical, 6)
+                        }
+                        .listRowBackground(Color.accentColor)
+                    } footer: {
+                        Button("不登录，仅在本机使用") {
+                            nameDraft = "我的笔记"
+                            creatingLocal = true
+                        }
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 14)
                     }
-                    NavigationLink(value: Route.connect) {
-                        ActionRow(icon: "icloud", tint: .accentColor, title: "接入服务器", detail: "连接常青笔记服务器，在多台设备间同步")
+                } else {
+                    Section {
+                        NavigationLink(value: Route.cloud) {
+                            ActionRow(icon: "icloud", tint: .accentColor, title: "登录云同步账户", detail: "在多台设备间同步，支持官方节点和自建服务器")
+                        }
+                        Button {
+                            nameDraft = ""
+                            creatingLocal = true
+                        } label: {
+                            ActionRow(icon: "plus", tint: .secondary, title: "新建本地笔记库", detail: "只保存在这台设备，无需账户，立即可用")
+                        }
+                    } footer: {
+                        if catalog.libraries.contains(where: \.canTurnOnSync) {
+                            Text("本地笔记库可以随时开启同步：注册新账户后，内容会自动上传。")
+                        }
                     }
-                } footer: {
-                    Text("本地笔记库不能转换为同步笔记库。要同步本地笔记，请新建一个同步笔记库，再导入从本地笔记库导出的内容。")
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
             #if os(iOS)
             .listStyle(.insetGrouped)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .navigationDestination(for: Route.self) { _ in
-                ConnectView { server, info, name in
-                    let site = info.siteName.trimmingCharacters(in: .whitespaces)
-                    catalog.createServer(server, name: name.isEmpty ? (site.isEmpty ? server.host : site) : name)
+            .navigationDestination(for: Route.self) { route in
+                switch route {
+                case .cloud:
+                    CloudSignInView()
+                case .turnOnSync(let id):
+                    if let ref = catalog.library(id), ref.canTurnOnSync {
+                        CloudSignInView(promoting: ref)
+                    }
                 }
             }
+            .onAppear(perform: takePendingSync)
+            .onChange(of: catalog.pendingSync) { takePendingSync() }
             .alert("新建本地笔记库", isPresented: $creatingLocal) {
                 TextField("名称", text: $nameDraft)
                 Button("取消", role: .cancel) {}
@@ -95,8 +143,18 @@ struct LibrariesView: View {
         #endif
     }
 
+    /// "Turn on sync" chosen inside a local library: continue here once it has closed.
+    private func takePendingSync() {
+        guard let id = catalog.pendingSync else { return }
+        catalog.pendingSync = nil
+        if catalog.library(id)?.canTurnOnSync == true { path = [.turnOnSync(id)] }
+    }
+
     @ViewBuilder private func actions(_ ref: LibraryRef) -> some View {
         Button("打开", systemImage: "folder") { catalog.open(ref.id) }
+        if ref.canTurnOnSync {
+            Button("开启同步", systemImage: "icloud.and.arrow.up") { path.append(.turnOnSync(ref.id)) }
+        }
         Button("重命名", systemImage: "pencil") { startRename(ref) }
         Divider()
         Button("移除", systemImage: "trash", role: .destructive) { removing = ref }
@@ -126,7 +184,8 @@ struct LibraryRow: View {
     }
 
     private var detail: String {
-        if ref.isLocal { return "仅保存在本机" }
+        if ref.migratedTo != nil { return "已迁移到云端，确认无误后可以移除" }
+        if ref.isLocal { return "仅保存在本机 · 未同步" }
         let host = ref.server?.host ?? ""
         return ref.account.map { "\(host) · @\($0)" } ?? host
     }
@@ -137,7 +196,7 @@ struct LibraryIcon: View {
     var size: CGFloat = 36
 
     var body: some View {
-        Image(systemName: ref.isLocal ? "internaldrive" : "icloud")
+        Image(systemName: ref.migratedTo != nil ? "checkmark.icloud" : ref.isLocal ? "internaldrive" : "icloud")
             .font(.system(size: size * 0.45))
             .foregroundStyle(ref.isLocal ? Color.secondary : Color.accentColor)
             .frame(width: size, height: size)

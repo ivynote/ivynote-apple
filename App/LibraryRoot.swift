@@ -123,7 +123,6 @@ struct OpenLibraryView: View {
     /// Switching libraries: save now, push what is pending, then stop.
     private func close() {
         if let account {
-            LanguageSettings.shared.onAccountChoice = nil
             LanguageSettings.shared.accountClosed(LanguageSettings.accountKey(server: account.server, userID: account.user.id))
         }
         guard let library else { return }

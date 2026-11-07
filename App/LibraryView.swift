@@ -101,6 +101,7 @@ func noteID(fromKey key: String) -> String? {
     return id == "more" || id.isEmpty ? nil : id
 }
 
+@MainActor
 func displayTitle(_ n: Note) -> String {
     n.title.trimmingCharacters(in: .whitespaces).isEmpty ? L.untitled : n.title
 }

@@ -154,16 +154,16 @@ struct TagPicker: View {
     var body: some View {
         NavigationStack {
             List {
-                let q = query.trimmingCharacters(in: .whitespaces).trimmingPrefix("#")
-                if !q.isEmpty && engine.tag(named: String(q)) == nil {
+                let q = String(query.trimmingCharacters(in: .whitespaces).trimmingPrefix("#"))
+                if !q.isEmpty && engine.tag(named: q) == nil {
                     Button {
-                        create(String(q))
+                        create(q)
                     } label: {
                         Label(L.createTag(q), systemImage: "plus")
                     }
                     .disabled(full || q.count > 50)
                 }
-                ForEach(matches(String(q))) { tag in
+                ForEach(matches(q)) { tag in
                     Button { toggle(tag) } label: {
                         HStack {
                             Circle().fill(TagPalette.color(for: tag)).frame(width: 8, height: 8)

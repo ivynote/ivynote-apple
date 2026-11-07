@@ -40,7 +40,7 @@ import Testing
         let t = StubTransport(["POST /api/v1/auth/register": .json(200, #"{"token":"tok","user":\#(userJSON)}"#)])
         _ = try await APIClient(server: server, transport: t).register(username: "ivy", password: "secret-pw", email: "", displayName: "")
         let body = try JSONSerialization.jsonObject(with: t.sent[0].httpBody!) as! [String: String]
-        #expect(body == ["username": "ivy", "password": "secret-pw"])
+        #expect(body == ["username": "ivy", "password": "secret-pw", "language": L10n.language.rawValue])
     }
 
     @Test func meSendsBearer() async throws {

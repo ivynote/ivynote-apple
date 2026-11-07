@@ -21,8 +21,11 @@ import Testing
 
     @Test func queuesOfflineAndReplacesTheLocalID() async throws {
         let fake = FakeSync()
-        fake.uploadHandler = { _, _, _ in throw APIError.unreachable("offline") }
+        // Start from a downloaded library so recovery uses an incremental pull.
+        fake.snapshots = [PullResponse(seq: 1)]
         let e = try engine(fake)
+        await e.sync()
+        fake.uploadHandler = { _, _, _ in throw APIError.unreachable("offline") }
         let f = try await e.addFile(Data("report".utf8), name: "report.pdf", mime: "application/pdf")
         #expect(f.local && f.id.hasPrefix("local-"))
         #expect(f.markdown == "[report.pdf](ivy://res/\(f.id))")
@@ -34,13 +37,13 @@ import Testing
         fake.uploadHandler = { data, name, mime in
             Attachment(id: "att00000001", name: name, mime: mime, size: Int64(data.count), createdAt: 1, updatedAt: 1)
         }
+        let recoveryStart = fake.calls.count
         await e.sync()
         #expect(e.uploads.isEmpty && e.state.uploads == 0)
         #expect(e.notes[note.id]?.body == "see [report.pdf](ivy://res/att00000001)\n")
         #expect(!FileManager.default.fileExists(atPath: copy.url.path))
         // Uploaded before the push, so the body went out with the server's id.
-        let i = try #require(fake.calls.firstIndex(of: "upload:report.pdf"))
-        #expect(fake.calls[(i + 1)...].first?.hasPrefix("push") == true)
+        #expect(Array(fake.calls[recoveryStart...]) == ["upload:report.pdf", "push:1", "pull:1"])
         let pushed = try #require(fake.pushed.last?.first)
         #expect(pushed.fields?["body"] == .string("see [report.pdf](ivy://res/att00000001)\n"))
     }

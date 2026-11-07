@@ -703,7 +703,7 @@ public final class SyncEngine {
             } catch let e as APIError where !Self.refused(e) {
                 throw e
             } catch {
-                let message = (error as? APIError)?.localizedDescription ?? "无法读取文件"
+                let message = (error as? APIError)?.localizedDescription ?? L10n.s.cannotReadFile
                 uploads[up.id]?.failed = message
                 uploadFailure = UploadFailure(uploadID: up.id, name: up.name, message: message)
                 continue

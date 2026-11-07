@@ -7,15 +7,7 @@ enum TagPalette {
     static let names = ["green", "blue", "amber", "pink", "purple", "gray"]
 
     static func label(_ name: String) -> String {
-        switch name {
-        case "green": "绿色"
-        case "blue": "蓝色"
-        case "amber": "琥珀"
-        case "pink": "粉色"
-        case "purple": "紫色"
-        case "gray": "灰色"
-        default: "自动"
-        }
+        L10n.s.tagColor(name)
     }
 
     static func name(for tag: Tag) -> String {
@@ -59,11 +51,11 @@ struct NoteMetaBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 Text(Self.time(note.updatedAt))
-                Text("\(WordCount.count(note.body).formatted()) 字")
+                Text(L.words(WordCount.count(note.body).formatted(.number.locale(L.locale))))
                 if uploading > 0 {
                     HStack(spacing: 4) {
                         ProgressView().controlSize(.mini)
-                        Text("上传中")
+                        Text(L.uploading)
                     }
                 }
                 ForEach(noteTags) { tag in
@@ -71,8 +63,8 @@ struct NoteMetaBar: View {
                         TagChip(tag: tag)
                     } else {
                         Menu {
-                            Button("从笔记移除", systemImage: "minus.circle") { remove(tag) }
-                            Button("编辑标签…", systemImage: "pencil") { editing = tag }
+                            Button(L.removeFromNote, systemImage: "minus.circle") { remove(tag) }
+                            Button(L.editTagEllipsis, systemImage: "pencil") { editing = tag }
                         } label: {
                             TagChip(tag: tag)
                         }
@@ -84,7 +76,7 @@ struct NoteMetaBar: View {
                 }
                 if !note.isTrashed {
                     Button { picking = true } label: {
-                        Label("标签", systemImage: "plus")
+                        Label(L.tags, systemImage: "plus")
                             .labelStyle(.titleAndIcon)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
@@ -92,7 +84,7 @@ struct NoteMetaBar: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
-                    .help("添加标签")
+                    .help(L.addTag)
                     .popover(isPresented: $picking) {
                         TagPicker(noteID: note.id)
                             .frame(minWidth: 280, minHeight: 320)
@@ -122,15 +114,15 @@ struct NoteMetaBar: View {
     static func time(_ ms: Millis, now: Date = Date()) -> String {
         let date = Date(timeIntervalSince1970: Double(ms) / 1000)
         let cal = Calendar.current
-        let clock = date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
+        let clock = date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).locale(L10n.s.locale))
         if cal.isDateInToday(date) { return clock }
-        if cal.isDateInYesterday(date) { return "昨天 \(clock)" }
+        if cal.isDateInYesterday(date) { return L10n.s.yesterday(clock) }
         let days = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: now)).day ?? 99
-        if days < 7 && days > 0 { return "\(date.formatted(.dateTime.weekday(.wide))) \(clock)" }
+        if days < 7 && days > 0 { return "\(date.formatted(.dateTime.weekday(.wide).locale(L10n.s.locale))) \(clock)" }
         if cal.isDate(date, equalTo: now, toGranularity: .year) {
-            return "\(date.formatted(.dateTime.month(.defaultDigits).day())) \(clock)"
+            return "\(date.formatted(.dateTime.month(.defaultDigits).day().locale(L10n.s.locale))) \(clock)"
         }
-        return date.formatted(.dateTime.year().month(.defaultDigits).day())
+        return date.formatted(.dateTime.year().month(.defaultDigits).day().locale(L10n.s.locale))
     }
 }
 
@@ -167,7 +159,7 @@ struct TagPicker: View {
                     Button {
                         create(String(q))
                     } label: {
-                        Label("创建「\(q)」", systemImage: "plus")
+                        Label(L.createTag(q), systemImage: "plus")
                     }
                     .disabled(full || q.count > 50)
                 }
@@ -187,15 +179,15 @@ struct TagPicker: View {
                     .disabled(full && !selected.contains(tag.id))
                 }
                 if full {
-                    Text("一篇笔记最多 \(Self.maxPerNote) 个标签").font(.footnote).foregroundStyle(.secondary)
+                    Text(L.maxTags(Self.maxPerNote)).font(.footnote).foregroundStyle(.secondary)
                 }
             }
             .overlay {
                 if engine.tags.isEmpty && query.isEmpty {
-                    ContentUnavailableView("还没有标签", systemImage: "tag", description: Text("输入名称创建第一个标签。"))
+                    ContentUnavailableView(L.noTags, systemImage: "tag", description: Text(L.noTagsHint))
                 }
             }
-            .searchable(text: $query, placement: .automatic, prompt: "搜索或创建标签")
+            .searchable(text: $query, placement: .automatic, prompt: L.searchOrCreateTag)
             .onSubmit(of: .search) {
                 let q = String(query.trimmingCharacters(in: .whitespaces).trimmingPrefix("#"))
                 guard !q.isEmpty else { return }
@@ -206,12 +198,12 @@ struct TagPicker: View {
                 }
                 query = ""
             }
-            .navigationTitle("标签")
+            .navigationTitle(L.tags)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button(L.done) { dismiss() } }
             }
         }
     }
@@ -257,12 +249,12 @@ struct TagEditor: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("名称") {
-                    TextField("标签名", text: $name)
+                Section(L.name) {
+                    TextField(L.tagName, text: $name)
                         .onSubmit(save)
                     if let error = nameError { Text(error).font(.footnote).foregroundStyle(.red) }
                 }
-                Section("颜色") {
+                Section(L.color) {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 44))], spacing: 12) {
                         swatch("")
                         ForEach(TagPalette.names, id: \.self) { swatch($0) }
@@ -270,22 +262,22 @@ struct TagEditor: View {
                     .padding(.vertical, 4)
                 }
                 Section {
-                    Button("删除标签", role: .destructive) { confirmDelete = true }
+                    Button(L.deleteTag, role: .destructive) { confirmDelete = true }
                 } footer: {
-                    Text("标签会从 \(usage) 篇笔记上移除，笔记本身不受影响。")
+                    Text(L.deleteTagMessage(usage))
                 }
             }
             .formStyle(.grouped)
-            .navigationTitle("编辑标签")
+            .navigationTitle(L.editTag)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("保存", action: save).disabled(nameError != nil) }
+                ToolbarItem(placement: .cancellationAction) { Button(L.cancel) { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button(L.save, action: save).disabled(nameError != nil) }
             }
-            .confirmationDialog("删除标签「\(name)」？", isPresented: $confirmDelete) {
-                Button("删除", role: .destructive) {
+            .confirmationDialog(L.deleteTagTitle(name), isPresented: $confirmDelete) {
+                Button(L.delete, role: .destructive) {
                     engine.deleteTag(tagID)
                     dismiss()
                 }
@@ -306,9 +298,9 @@ struct TagEditor: View {
     private var clean: String { String(name.trimmingCharacters(in: .whitespaces).trimmingPrefix("#")) }
 
     private var nameError: String? {
-        if clean.isEmpty { return "名称不能为空" }
-        if clean.count > 50 { return "最多 50 个字符" }
-        if let other = engine.tag(named: clean), other.id != tagID { return "已有同名标签" }
+        if clean.isEmpty { return L.nameEmpty }
+        if clean.count > 50 { return L.nameTooLong }
+        if let other = engine.tag(named: clean), other.id != tagID { return L.tagExists }
         return nil
     }
 

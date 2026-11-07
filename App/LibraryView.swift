@@ -37,25 +37,25 @@ struct LibraryView: View {
             if let id = selectedNote, engine.notes[id] != nil {
                 NoteEditorView(noteID: id).id(id)
             } else {
-                ContentUnavailableView("未选择笔记", systemImage: "note.text")
+                ContentUnavailableView(L.noNoteSelected, systemImage: "note.text")
             }
         }
         .sheet(isPresented: $showAccount) { AccountView() }
         .sheet(isPresented: $showMedia) { MediaLibraryView(openNote: reveal) }
-        .alert("文件未能上传", isPresented: Binding(get: { engine.uploadFailure != nil }, set: { if !$0 { engine.uploadFailure = nil } }),
+        .alert(L.uploadFailedTitle, isPresented: Binding(get: { engine.uploadFailure != nil }, set: { if !$0 { engine.uploadFailure = nil } }),
                presenting: engine.uploadFailure) { _ in
-            Button("好", role: .cancel) { engine.uploadFailure = nil }
+            Button(L.ok, role: .cancel) { engine.uploadFailure = nil }
         } message: { f in
-            Text("「\(f.name)」被服务器拒绝：\(f.message)。它会留在本机，下次启动时再试；其他内容照常同步。")
+            Text(L.uploadRefused(f.name, f.message))
         }
-        .alert("内容冲突", isPresented: Binding(get: { engine.conflict != nil }, set: { if !$0 { engine.conflict = nil } }), presenting: engine.conflict) { c in
-            Button("打开副本") {
+        .alert(L.conflictTitle, isPresented: Binding(get: { engine.conflict != nil }, set: { if !$0 { engine.conflict = nil } }), presenting: engine.conflict) { c in
+            Button(L.openCopy) {
                 reveal(c.copyID)
                 engine.conflict = nil
             }
-            Button("好", role: .cancel) { engine.conflict = nil }
+            Button(L.ok, role: .cancel) { engine.conflict = nil }
         } message: { c in
-            Text("「\(engine.notes[c.noteID].map(displayTitle) ?? "笔记")」在其他设备上也改动了同一处。服务器保留了它的版本，你的修改已另存为冲突副本。")
+            Text(L.conflictMessage(engine.notes[c.noteID].map(displayTitle) ?? L.note))
         }
         .onAppear {
             expanded = ShelfState.load(for: library.ref)
@@ -102,7 +102,7 @@ func noteID(fromKey key: String) -> String? {
 }
 
 func displayTitle(_ n: Note) -> String {
-    n.title.trimmingCharacters(in: .whitespaces).isEmpty ? "无标题" : n.title
+    n.title.trimmingCharacters(in: .whitespaces).isEmpty ? L.untitled : n.title
 }
 
 /// Which branches are open, kept on this device per library (guide 11.2).
@@ -173,13 +173,13 @@ struct ShelfView: View {
         .contentMargins(.top, 4, for: .scrollContent)
         #endif
         .environment(\.defaultMinListRowHeight, ShelfMetrics.rowHeight)
-        .searchable(text: $query, placement: .sidebar, prompt: "搜索笔记")
+        .searchable(text: $query, placement: .sidebar, prompt: L.searchNotes)
         .modifier(NewNoteButton { newNote(in: "") })
         .refreshable { await engine.sync() }
-        .alert("新建笔记本", isPresented: Binding(get: { newFolderParent != nil }, set: { if !$0 { newFolderParent = nil } })) {
-            TextField("名称", text: $nameDraft)
-            Button("取消", role: .cancel) {}
-            Button("创建") {
+        .alert(L.newFolder, isPresented: Binding(get: { newFolderParent != nil }, set: { if !$0 { newFolderParent = nil } })) {
+            TextField(L.name, text: $nameDraft)
+            Button(L.cancel, role: .cancel) {}
+            Button(L.create) {
                 let name = nameDraft.trimmingCharacters(in: .whitespaces)
                 if !name.isEmpty, let parent = newFolderParent {
                     engine.createFolder(name: String(name.prefix(100)), parentId: parent)
@@ -187,27 +187,27 @@ struct ShelfView: View {
                 }
             }
         }
-        .alert("重命名笔记本", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-            TextField("名称", text: $nameDraft)
-            Button("取消", role: .cancel) {}
-            Button("保存") {
+        .alert(L.renameFolder, isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField(L.name, text: $nameDraft)
+            Button(L.cancel, role: .cancel) {}
+            Button(L.save) {
                 let name = nameDraft.trimmingCharacters(in: .whitespaces)
                 if let f = renaming, !name.isEmpty { engine.renameFolder(f.id, to: String(name.prefix(100))) }
             }
         }
-        .confirmationDialog("删除笔记本？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), presenting: deleting) { f in
-            Button("删除「\(f.name)」", role: .destructive) { engine.deleteFolder(f.id) }
+        .confirmationDialog(L.deleteFolderTitle, isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), presenting: deleting) { f in
+            Button(L.deleteNamed(f.name), role: .destructive) { engine.deleteFolder(f.id) }
         } message: { _ in
-            Text("子笔记本会一起删除，其中的笔记移到回收站。")
+            Text(L.deleteFolderMessage)
         }
         .sheet(item: $editingTag) { tag in TagEditor(tagID: tag.id) }
-        .confirmationDialog("永久删除回收站中的全部笔记？", isPresented: $confirmEmpty) {
-            Button("清空回收站", role: .destructive) {
+        .confirmationDialog(L.emptyTrashTitle, isPresented: $confirmEmpty) {
+            Button(L.emptyTrash, role: .destructive) {
                 if let id = selection.flatMap(noteID(fromKey:)), engine.notes[id]?.isTrashed == true { selection = nil }
                 engine.emptyTrash()
             }
         } message: {
-            Text("此操作无法撤销。")
+            Text(L.cannotUndo)
         }
     }
 
@@ -279,22 +279,22 @@ struct ShelfView: View {
         switch row.kind {
         case .folder:
             if let f = row.folder {
-                Button("新建笔记", systemImage: "square.and.pencil") { newNote(in: f.id) }
-                Button("新建子笔记本", systemImage: "folder.badge.plus") { startNewFolder(parent: f.id) }
-                Button("重命名", systemImage: "pencil") { nameDraft = f.name; renaming = f }
-                Button("删除", systemImage: "trash", role: .destructive) { deleting = f }
+                Button(L.newNote, systemImage: "square.and.pencil") { newNote(in: f.id) }
+                Button(L.newSubfolder, systemImage: "folder.badge.plus") { startNewFolder(parent: f.id) }
+                Button(L.rename, systemImage: "pencil") { nameDraft = f.name; renaming = f }
+                Button(L.delete, systemImage: "trash", role: .destructive) { deleting = f }
             }
         case .note:
             if let n = row.note { NoteMenu(note: n, selection: $selection) }
         case .tag:
             if let t = row.tag {
-                Button("编辑标签…", systemImage: "pencil") { editingTag = t }
+                Button(L.editTagEllipsis, systemImage: "pencil") { editingTag = t }
             }
         case .group where row.key == Shelf.trashKey && row.count > 0:
-            Button("清空回收站", systemImage: "trash.slash", role: .destructive) { confirmEmpty = true }
+            Button(L.emptyTrash, systemImage: "trash.slash", role: .destructive) { confirmEmpty = true }
         case .heading:
-            Button("新建笔记", systemImage: "square.and.pencil") { newNote(in: "") }
-            Button("新建笔记本", systemImage: "folder.badge.plus") { startNewFolder(parent: "") }
+            Button(L.newNote, systemImage: "square.and.pencil") { newNote(in: "") }
+            Button(L.newFolder, systemImage: "folder.badge.plus") { startNewFolder(parent: "") }
         default:
             EmptyView()
         }
@@ -303,18 +303,18 @@ struct ShelfView: View {
     @ViewBuilder private func swipes(for row: Shelf.Row) -> some View {
         if let n = row.note {
             if n.isTrashed {
-                Button("永久删除", systemImage: "trash.slash", role: .destructive) {
+                Button(L.deleteForever, systemImage: "trash.slash", role: .destructive) {
                     if selection == row.key { selection = nil }
                     engine.deleteNote(n.id)
                 }
-                Button("恢复", systemImage: "arrow.uturn.backward") { engine.updateNote(n.id, .init(trashed: false)) }
+                Button(L.restore, systemImage: "arrow.uturn.backward") { engine.updateNote(n.id, .init(trashed: false)) }
                     .tint(.green)
             } else {
-                Button("移到回收站", systemImage: "trash", role: .destructive) {
+                Button(L.moveToTrash, systemImage: "trash", role: .destructive) {
                     if selection == row.key { selection = nil }
                     engine.updateNote(n.id, .init(trashed: true))
                 }
-                Button(n.pinned ? "取消置顶" : "置顶", systemImage: n.pinned ? "pin.slash" : "pin") {
+                Button(n.pinned ? L.unpin : L.pin, systemImage: n.pinned ? "pin.slash" : "pin") {
                     engine.updateNote(n.id, .init(pinned: !n.pinned))
                 }
                 .tint(.orange)
@@ -381,18 +381,18 @@ struct ShelfRowView: View {
             }
             .padding(.top, 10)
             .contentShape(Rectangle())
-            .accessibilityLabel(row.open ? "收起置顶" : "展开置顶")
+            .accessibilityLabel(row.open ? L.collapsePinned : L.expandPinned)
         case .heading:
             HStack {
                 Text(row.label).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                 Spacer()
                 Menu {
-                    Picker("排序", selection: $sortBy) {
+                    Picker(L.sort, selection: $sortBy) {
                         ForEach(Shelf.SortBy.allCases, id: \.self) { Text($0.label).tag($0) }
                     }
                     Divider()
-                    Button("新建笔记", systemImage: "square.and.pencil") { onNewNote("") }
-                    Button("新建笔记本", systemImage: "folder.badge.plus", action: onNewFolder)
+                    Button(L.newNote, systemImage: "square.and.pencil") { onNewNote("") }
+                    Button(L.newFolder, systemImage: "folder.badge.plus", action: onNewFolder)
                 } label: {
                     Image(systemName: "ellipsis").frame(width: ShelfMetrics.rowHeight, height: ShelfMetrics.rowHeight)
                         .contentShape(Rectangle())
@@ -403,11 +403,11 @@ struct ShelfRowView: View {
             }
             .padding(.top, 10)
         case .create:
-            Label("新建笔记本", systemImage: "plus").foregroundStyle(.secondary)
+            Label(L.newFolder, systemImage: "plus").foregroundStyle(.secondary)
         case .more:
             HStack(spacing: 6) {
                 indent
-                Text("再显示 \(min(row.count, Shelf.page)) 篇（共 \(row.count) 篇未显示）")
+                Text(L.showMore(min(row.count, Shelf.page), row.count))
                     .font(.footnote).foregroundStyle(.tint)
             }
         default:
@@ -450,7 +450,7 @@ struct ShelfRowView: View {
 
     private var title: String {
         switch row.kind {
-        case .note: row.label.trimmingCharacters(in: .whitespaces).isEmpty ? "无标题" : row.label
+        case .note: row.label.trimmingCharacters(in: .whitespaces).isEmpty ? L.untitled : row.label
         case .tag: "#" + row.label
         default: row.label
         }
@@ -480,17 +480,17 @@ struct NoteMenu: View {
 
     var body: some View {
         if note.isTrashed {
-            Button("恢复", systemImage: "arrow.uturn.backward") { engine.updateNote(note.id, .init(trashed: false)) }
-            Button("永久删除", systemImage: "trash.slash", role: .destructive) {
+            Button(L.restore, systemImage: "arrow.uturn.backward") { engine.updateNote(note.id, .init(trashed: false)) }
+            Button(L.deleteForever, systemImage: "trash.slash", role: .destructive) {
                 clearIfSelected()
                 engine.deleteNote(note.id)
             }
         } else {
-            Button(note.pinned ? "取消置顶" : "置顶", systemImage: note.pinned ? "pin.slash" : "pin") {
+            Button(note.pinned ? L.unpin : L.pin, systemImage: note.pinned ? "pin.slash" : "pin") {
                 engine.updateNote(note.id, .init(pinned: !note.pinned))
             }
             MoveToFolderMenu(note: note)
-            Button("移到回收站", systemImage: "trash", role: .destructive) {
+            Button(L.moveToTrash, systemImage: "trash", role: .destructive) {
                 clearIfSelected()
                 engine.updateNote(note.id, .init(trashed: true))
             }
@@ -550,8 +550,8 @@ struct MoveToFolderMenu: View {
     let note: Note
 
     var body: some View {
-        Menu("移动到", systemImage: "folder") {
-            option("无笔记本", id: "")
+        Menu(L.moveTo, systemImage: "folder") {
+            option(L.noNotebook, id: "")
             ForEach(flatFolders(), id: \.folder.id) { item in
                 option(String(repeating: "    ", count: item.depth) + item.folder.name, id: item.folder.id)
             }
@@ -605,7 +605,7 @@ struct LibraryHeader: View {
 
     var body: some View {
         Menu {
-            Section("笔记库") {
+            Section(L.libraries) {
                 ForEach(catalog.libraries) { ref in
                     Button {
                         if ref.id != library.ref.id { catalog.open(ref.id) }
@@ -620,12 +620,16 @@ struct LibraryHeader: View {
             }
             Section {
                 if !library.ref.isLocal {
-                    Button("媒体库…", systemImage: "photo.on.rectangle.angled") { showMedia = true }
-                    Button("账户与同步…", systemImage: "person.crop.circle") { showAccount = true }
+                    Button(L.mediaLibraryEllipsis, systemImage: "photo.on.rectangle.angled") { showMedia = true }
+                    Button(L.accountAndSync, systemImage: "person.crop.circle") { showAccount = true }
                 } else if catalog.library(library.ref.id)?.canTurnOnSync == true {
-                    Button("开启多端同步…", systemImage: "icloud.and.arrow.up") { catalog.turnOnSync(library.ref.id) }
+                    Button(L.turnOnSyncEllipsis, systemImage: "icloud.and.arrow.up") { catalog.turnOnSync(library.ref.id) }
                 }
-                Button("管理笔记库…", systemImage: "books.vertical") { catalog.open(nil) }
+                Button(L.manageLibraries, systemImage: "books.vertical") { catalog.open(nil) }
+            }
+            Section {
+                // A submenu: follow the system, or one language.
+                LanguagePicker().pickerStyle(.menu)
             }
         } label: {
             HStack(spacing: 10) {
@@ -650,8 +654,8 @@ struct LibraryHeader: View {
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
-        .help("切换笔记库")
-        .accessibilityLabel("笔记库：\(library.ref.name)")
+        .help(L.switchLibrary)
+        .accessibilityLabel(L.libraryLabel(library.ref.name))
     }
 }
 
@@ -664,38 +668,38 @@ struct SyncStatusView: View {
             HStack(spacing: 6) {
                 if engine.isLocal {
                     Image(systemName: "icloud.slash")
-                    Text("仅保存在本机 · 未同步")
+                    Text(L.localUnsynced)
                 } else {
                 switch s.status {
                 case .syncing:
                     ProgressView().controlSize(.mini)
-                    Text(s.initial ? "正在下载笔记…" : "同步中…")
+                    Text(s.initial ? L.downloadingNotes : L.syncing)
                 case .offline:
                     Image(systemName: "wifi.slash")
-                    Text(s.pending > 0 ? "离线 · \(s.pending) 条待同步" : "离线")
+                    Text(s.pending > 0 ? L.offlinePending(s.pending) : L.offline)
                 case .error:
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    Text("同步出错").help(s.error ?? "")
+                    Text(L.syncError).help(s.error ?? "")
                 case .idle:
                     if s.pending > 0 {
                         Image(systemName: "arrow.triangle.2.circlepath")
-                        Text("\(s.pending) 条待同步")
+                        Text(L.pending(s.pending))
                     } else if s.lastSyncAt > 0 {
                         Image(systemName: "checkmark.icloud")
                         TimelineView(.periodic(from: .now, by: 30)) { _ in
-                            Text("已同步 · \(Date(timeIntervalSince1970: Double(s.lastSyncAt) / 1000).formatted(.relative(presentation: .named)))")
+                            Text(L.synced(Date(timeIntervalSince1970: Double(s.lastSyncAt) / 1000).formatted(.relative(presentation: .named).locale(L.locale))))
                         }
                     } else {
-                        Text("尚未同步")
+                        Text(L.neverSynced)
                     }
                 }
                 }
             }
             if s.blocked > 0 {
-                Text("\(s.blocked) 条更改被服务器拒绝").foregroundStyle(.orange)
+                Text(L.blocked(s.blocked)).foregroundStyle(.orange)
             }
             if s.uploads > 0 && !engine.isLocal {
-                Text("\(s.uploads) 个文件待上传")
+                Text(L.uploadsPending(s.uploads))
             }
         }
         .font(.footnote)
@@ -711,7 +715,7 @@ private struct NewNoteButton: ViewModifier {
     let action: () -> Void
 
     private var button: some View {
-        Button("新建笔记", systemImage: "square.and.pencil", action: action)
+        Button(L.newNote, systemImage: "square.and.pencil", action: action)
             .keyboardShortcut("n", modifiers: .command)
     }
 

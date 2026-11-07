@@ -23,9 +23,9 @@ struct NoteEditorView: View {
             VStack(alignment: .leading, spacing: 0) {
                 if note.isTrashed {
                     HStack {
-                        Label("这篇笔记在回收站中", systemImage: "trash")
+                        Label(L.noteInTrash, systemImage: "trash")
                         Spacer()
-                        Button("恢复") { engine.updateNote(noteID, .init(trashed: false)) }
+                        Button(L.restore) { engine.updateNote(noteID, .init(trashed: false)) }
                     }
                     .font(.callout)
                     .padding(12)
@@ -52,33 +52,33 @@ struct NoteEditorView: View {
             #endif
             .toolbarTitleMenu {
                 if !note.isTrashed {
-                    Button("重命名", systemImage: "pencil") {
+                    Button(L.rename, systemImage: "pencil") {
                         titleDraft = note.title
                         renaming = true
                     }
                 }
             }
-            .alert("重命名笔记", isPresented: $renaming) {
-                TextField("无标题", text: $titleDraft)
-                Button("取消", role: .cancel) {}
-                Button("保存") { rename() }
+            .alert(L.renameNote, isPresented: $renaming) {
+                TextField(L.untitled, text: $titleDraft)
+                Button(L.cancel, role: .cancel) {}
+                Button(L.save) { rename() }
             }
             .modifier(NoteOutline(text: note.body))
             .toolbar {
                 if !note.isTrashed {
                     InsertMenu(pickers: $pickers)
-                    Button("分享", systemImage: "square.and.arrow.up") { sharing = true }
-                        .help("分享与导出")
-                    Menu("更多", systemImage: "ellipsis.circle") {
-                        Button(note.pinned ? "取消置顶" : "置顶", systemImage: note.pinned ? "pin.slash" : "pin") {
+                    Button(L.share, systemImage: "square.and.arrow.up") { sharing = true }
+                        .help(L.shareAndExport)
+                    Menu(L.more, systemImage: "ellipsis.circle") {
+                        Button(note.pinned ? L.unpin : L.pin, systemImage: note.pinned ? "pin.slash" : "pin") {
                             engine.updateNote(noteID, .init(pinned: !note.pinned))
                         }
                         MoveToFolderMenu(note: note)
                         if !library.ref.isLocal {
-                            Button("历史版本", systemImage: "clock.arrow.circlepath") { showHistory = true }
+                            Button(L.history, systemImage: "clock.arrow.circlepath") { showHistory = true }
                         }
                         Divider()
-                        Button("移到回收站", systemImage: "trash", role: .destructive) {
+                        Button(L.moveToTrash, systemImage: "trash", role: .destructive) {
                             engine.updateNote(noteID, .init(trashed: true))
                         }
                     }
@@ -86,6 +86,7 @@ struct NoteEditorView: View {
             }
             .onAppear {
                 host.setTheme(dark: colorScheme == .dark)
+                host.setLanguage(LanguageSettings.shared.current)
                 host.open(note, focus: note.body.isEmpty && note.title.isEmpty && !note.isTrashed)
                 let inserter = inserter, engine = engine, host = host, id = noteID
                 host.onFiles = { [weak host] files in
@@ -105,6 +106,7 @@ struct NoteEditorView: View {
             .onChange(of: note.body) { _, body in host.bodyChanged(noteID, body) }
             .onChange(of: note.isTrashed) { _, trashed in host.setReadonly(trashed) }
             .onChange(of: colorScheme) { _, scheme in host.setTheme(dark: scheme == .dark) }
+            .onChange(of: LanguageSettings.shared.current) { _, language in host.setLanguage(language) }
         }
     }
 
@@ -163,11 +165,11 @@ struct NoteOutline: ViewModifier {
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button(shown.wrappedValue ? "隐藏大纲" : "显示大纲", systemImage: "list.bullet.indent") {
+                    Button(shown.wrappedValue ? L.hideOutline : L.showOutline, systemImage: "list.bullet.indent") {
                         withAnimation(.snappy) { shown.wrappedValue.toggle() }
                     }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
-                    .help(shown.wrappedValue ? "隐藏大纲 ⇧⌘O" : "显示大纲 ⇧⌘O")
+                    .help((shown.wrappedValue ? L.hideOutline : L.showOutline) + " ⇧⌘O")
                 }
             }
     }
@@ -211,7 +213,7 @@ struct OutlineView: View {
     // note's in the bar.
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text("大纲")
+            Text(L.outline)
                 .font(.system(size: OutlineMetrics.font, weight: .semibold))
             if !headings.isEmpty {
                 Text("\(headings.count)")
@@ -228,8 +230,8 @@ struct OutlineView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("隐藏大纲")
-                .accessibilityLabel("隐藏大纲")
+                .help(L.hideOutline)
+                .accessibilityLabel(L.hideOutline)
             }
         }
         .padding(.leading, 18)
@@ -243,10 +245,10 @@ struct OutlineView: View {
             Image(systemName: "text.alignleft")
                 .font(.system(size: 18, weight: .light))
                 .foregroundStyle(.tertiary)
-            Text("还没有标题")
+            Text(L.noHeadings)
                 .font(.system(size: OutlineMetrics.font, weight: .medium))
                 .foregroundStyle(.secondary)
-            Text("以 # 开头的行会出现在这里。")
+            Text(L.noHeadingsHint)
                 .font(.system(size: OutlineMetrics.font - 1))
                 .foregroundStyle(.tertiary)
         }
@@ -335,17 +337,17 @@ struct FormatBar: View {
     @Binding var pickers: AttachmentPickerState
 
     private let items: [(String, String, String)] = [
-        ("h1", "number", "标题"),
-        ("bold", "bold", "加粗"),
-        ("italic", "italic", "斜体"),
-        ("task", "checklist", "待办"),
-        ("list", "list.bullet", "列表"),
-        ("ordered", "list.number", "编号"),
-        ("quote", "text.quote", "引用"),
-        ("code", "chevron.left.forwardslash.chevron.right", "代码"),
-        ("wiki", "link.badge.plus", "双链"),
-        ("link", "link", "链接"),
-        ("strike", "strikethrough", "删除线"),
+        ("h1", "number", L.sortTitle),
+        ("bold", "bold", L.formatBold),
+        ("italic", "italic", L.formatItalic),
+        ("task", "checklist", L.formatTask),
+        ("list", "list.bullet", L.formatList),
+        ("ordered", "list.number", L.formatOrdered),
+        ("quote", "text.quote", L.formatQuote),
+        ("code", "chevron.left.forwardslash.chevron.right", L.formatCode),
+        ("wiki", "link.badge.plus", L.formatWikiLink),
+        ("link", "link", L.formatLink),
+        ("strike", "strikethrough", L.formatStrike),
     ]
 
     var body: some View {
@@ -360,21 +362,21 @@ struct FormatBar: View {
                     }
                     // Files (guide 3.2): photos, the camera, any file.
                     Button { pickers.photos = true } label: { Image(systemName: "photo").frame(width: 40, height: 40) }
-                        .accessibilityLabel("图片")
+                        .accessibilityLabel(L.photo)
                     if AttachmentPickerState.cameraAvailable {
                         Button { pickers.camera = true } label: { Image(systemName: "camera").frame(width: 40, height: 40) }
-                            .accessibilityLabel("拍照")
+                            .accessibilityLabel(L.camera)
                     }
                     Button { pickers.files = true } label: { Image(systemName: "paperclip").frame(width: 40, height: 40) }
-                        .accessibilityLabel("附件")
+                        .accessibilityLabel(L.attachment)
                 }
                 .padding(.horizontal, 6)
             }
             Divider().frame(height: 24)
             Button { host.command("undo") } label: { Image(systemName: "arrow.uturn.backward").frame(width: 40, height: 40) }
-                .accessibilityLabel("撤销")
+                .accessibilityLabel(L.undo)
             Button { host.command("blur") } label: { Image(systemName: "keyboard.chevron.compact.down").frame(width: 44, height: 40) }
-                .accessibilityLabel("收起键盘")
+                .accessibilityLabel(L.hideKeyboard)
         }
         .font(.system(size: 16))
         .tint(.primary)

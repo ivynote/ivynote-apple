@@ -26,8 +26,8 @@ struct LibrariesView: View {
                             .resizable()
                             .frame(width: 64, height: 64)
                             .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                        Text(catalog.libraries.isEmpty ? "常青笔记" : "笔记库").font(.title2.weight(.semibold))
-                        Text(catalog.libraries.isEmpty ? "本地优先的 Markdown 笔记，在手机、电脑和网页间同步。" : "选择要打开的笔记库")
+                        Text(catalog.libraries.isEmpty ? L.appName : L.libraries).font(.title2.weight(.semibold))
+                        Text(catalog.libraries.isEmpty ? L.welcome : L.pickLibrary)
                             .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
@@ -42,12 +42,12 @@ struct LibrariesView: View {
                                 .buttonStyle(.plain)
                                 .contextMenu { actions(ref) }
                                 .swipeActions {
-                                    Button("移除", systemImage: "trash", role: .destructive) { removing = ref }
-                                    Button("重命名", systemImage: "pencil") { startRename(ref) }
+                                    Button(L.remove, systemImage: "trash", role: .destructive) { removing = ref }
+                                    Button(L.rename, systemImage: "pencil") { startRename(ref) }
                                 }
                                 .swipeActions(edge: .leading) {
                                     if ref.canTurnOnSync {
-                                        Button("开启同步", systemImage: "icloud.and.arrow.up") { path.append(.turnOnSync(ref.id)) }
+                                        Button(L.turnOnSync, systemImage: "icloud.and.arrow.up") { path.append(.turnOnSync(ref.id)) }
                                             .tint(.accentColor)
                                     }
                                 }
@@ -65,8 +65,8 @@ struct LibrariesView: View {
                                     .frame(width: 40, height: 40)
                                     .background(.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("开始使用 · 多端同步").font(.body.weight(.semibold))
-                                    Text("登录或注册，笔记在手机、电脑和网页间自动同步").font(.footnote).opacity(0.85)
+                                    Text(L.startCloud).font(.body.weight(.semibold))
+                                    Text(L.startCloudHint).font(.footnote).opacity(0.85)
                                 }
                                 Spacer(minLength: 0)
                             }
@@ -75,8 +75,8 @@ struct LibrariesView: View {
                         }
                         .listRowBackground(Color.accentColor)
                     } footer: {
-                        Button("不登录，仅在本机使用") {
-                            nameDraft = "我的笔记"
+                        Button(L.localOnly) {
+                            nameDraft = L.defaultLibraryName
                             creatingLocal = true
                         }
                         .font(.subheadline)
@@ -86,20 +86,27 @@ struct LibrariesView: View {
                 } else {
                     Section {
                         NavigationLink(value: Route.cloud) {
-                            ActionRow(icon: "icloud", tint: .accentColor, title: "登录云同步账户", detail: "在多台设备间同步，支持官方节点和自建服务器")
+                            ActionRow(icon: "icloud", tint: .accentColor, title: L.connect, detail: L.connectHint)
                         }
                         Button {
                             nameDraft = ""
                             creatingLocal = true
                         } label: {
-                            ActionRow(icon: "plus", tint: .secondary, title: "新建本地笔记库", detail: "只保存在这台设备，无需账户，立即可用")
+                            ActionRow(icon: "plus", tint: .secondary, title: L.newLocal, detail: L.newLocalHint)
                         }
                     } footer: {
                         if catalog.libraries.contains(where: \.canTurnOnSync) {
-                            Text("本地笔记库可以随时开启同步：注册新账户后，内容会自动上传。")
+                            Text(L.canConvert)
                         }
                     }
                     .buttonStyle(.plain)
+                }
+
+                // Before signing in: this device's choice.
+                Section {
+                    LanguagePicker()
+                } footer: {
+                    LanguageHint()
                 }
             }
             #if os(iOS)
@@ -118,24 +125,24 @@ struct LibrariesView: View {
             }
             .onAppear(perform: takePendingSync)
             .onChange(of: catalog.pendingSync) { takePendingSync() }
-            .alert("新建本地笔记库", isPresented: $creatingLocal) {
-                TextField("名称", text: $nameDraft)
-                Button("取消", role: .cancel) {}
-                Button("创建") { catalog.createLocal(name: nameDraft) }
+            .alert(L.newLocal, isPresented: $creatingLocal) {
+                TextField(L.name, text: $nameDraft)
+                Button(L.cancel, role: .cancel) {}
+                Button(L.create) { catalog.createLocal(name: nameDraft) }
             } message: {
-                Text("笔记只保存在这台设备上，不会同步。")
+                Text(L.newLocalMessage)
             }
-            .alert("重命名笔记库", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-                TextField("名称", text: $nameDraft)
-                Button("取消", role: .cancel) {}
-                Button("保存") { if let r = renaming { catalog.rename(r.id, to: nameDraft) } }
+            .alert(L.renameLibrary, isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+                TextField(L.name, text: $nameDraft)
+                Button(L.cancel, role: .cancel) {}
+                Button(L.save) { if let r = renaming { catalog.rename(r.id, to: nameDraft) } }
             }
-            .confirmationDialog("移除笔记库", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { ref in
-                Button("移除「\(ref.name)」", role: .destructive) { catalog.remove(ref.id) }
+            .confirmationDialog(L.removeLibrary, isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { ref in
+                Button(L.removeNamed(ref.name), role: .destructive) { catalog.remove(ref.id) }
             } message: { ref in
                 Text(ref.isLocal
-                     ? "将永久删除「\(ref.name)」里的全部笔记，无法恢复。"
-                     : "将从这台设备删除「\(ref.name)」的本地副本和登录状态。服务器上的笔记不受影响，但尚未同步的更改会丢失。")
+                     ? L.removeLocalMessage(ref.name)
+                     : L.removeServerMessage(ref.name))
             }
         }
         #if os(macOS)
@@ -151,13 +158,13 @@ struct LibrariesView: View {
     }
 
     @ViewBuilder private func actions(_ ref: LibraryRef) -> some View {
-        Button("打开", systemImage: "folder") { catalog.open(ref.id) }
+        Button(L.open, systemImage: "folder") { catalog.open(ref.id) }
         if ref.canTurnOnSync {
-            Button("开启同步", systemImage: "icloud.and.arrow.up") { path.append(.turnOnSync(ref.id)) }
+            Button(L.turnOnSync, systemImage: "icloud.and.arrow.up") { path.append(.turnOnSync(ref.id)) }
         }
-        Button("重命名", systemImage: "pencil") { startRename(ref) }
+        Button(L.rename, systemImage: "pencil") { startRename(ref) }
         Divider()
-        Button("移除", systemImage: "trash", role: .destructive) { removing = ref }
+        Button(L.remove, systemImage: "trash", role: .destructive) { removing = ref }
     }
 
     private func startRename(_ ref: LibraryRef) {
@@ -184,8 +191,8 @@ struct LibraryRow: View {
     }
 
     private var detail: String {
-        if ref.migratedTo != nil { return "已迁移到云端，确认无误后可以移除" }
-        if ref.isLocal { return "仅保存在本机 · 未同步" }
+        if ref.migratedTo != nil { return L.migratedHint }
+        if ref.isLocal { return L.localUnsynced }
         let host = ref.server?.host ?? ""
         return ref.account.map { "\(host) · @\($0)" } ?? host
     }

@@ -68,11 +68,14 @@ public struct APIClient: Sendable {
         return (r.token, r.user)
     }
 
-    public func register(username: String, password: String, email: String, displayName: String) async throws -> (token: String, user: User) {
-        struct Body: Encodable { var username: String; var password: String; var email: String?; var displayName: String? }
+    /// `language`: the interface language at sign-up; it becomes the account's.
+    public func register(username: String, password: String, email: String, displayName: String,
+                         language: String = L10n.language.rawValue) async throws -> (token: String, user: User) {
+        struct Body: Encodable { var username: String; var password: String; var email: String?; var displayName: String?; var language: String? }
         let body = Body(username: username, password: password,
                         email: email.isEmpty ? nil : email,
-                        displayName: displayName.isEmpty ? nil : displayName)
+                        displayName: displayName.isEmpty ? nil : displayName,
+                        language: language.isEmpty ? nil : language)
         let r: AuthResponse = try await send("POST", "auth/register", body: body)
         return (r.token, r.user)
     }
@@ -87,6 +90,12 @@ public struct APIClient: Sendable {
 
     public func me() async throws -> User {
         try await send("GET", "me")
+    }
+
+    /// Sets the account's interface language; "" clears it (follow the device).
+    public func setLanguage(_ language: String) async throws -> User {
+        struct Body: Encodable { var language: String }
+        return try await send("PATCH", "me", body: Body(language: language))
     }
 
     // MARK: Plumbing
@@ -105,6 +114,8 @@ public struct APIClient: Sendable {
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        // The interface language, so server messages can match it.
+        req.setValue(L10n.language.rawValue, forHTTPHeaderField: "Accept-Language")
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")

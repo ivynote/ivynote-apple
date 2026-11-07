@@ -64,11 +64,11 @@ struct OpenLibraryView: View {
                     .environment(editor)
             } else if let openError {
                 ContentUnavailableView {
-                    Label("无法打开本地数据", systemImage: "exclamationmark.triangle")
+                    Label(L.cannotOpenData, systemImage: "exclamationmark.triangle")
                 } description: {
                     Text(openError)
                 } actions: {
-                    Button("返回笔记库列表") { catalog.open(nil) }
+                    Button(L.backToLibraries) { catalog.open(nil) }
                 }
             } else {
                 ProgressView()
@@ -77,6 +77,11 @@ struct OpenLibraryView: View {
         .task { open() }
         .onChange(of: scenePhase) { _, phase in handle(phase) }
         .onDisappear { close() }
+        // `/me` refreshed the account: its language may have changed on another device.
+        .onChange(of: account?.user.language) { _, tag in
+            guard let account, let tag else { return }
+            LanguageSettings.shared.accountOpened(LanguageSettings.accountKey(server: account.server, userID: account.user.id), serverLanguage: tag)
+        }
     }
 
     private func open() {
@@ -86,6 +91,16 @@ struct OpenLibraryView: View {
             // Notes of another account on this server must not mix in.
             if let previous = ref.userID, previous != account.user.id { LocalStore.remove(at: url) }
             catalog.signedIn(ref.id, user: account.user)
+            // Signed in: the account's language comes first; a change made
+            // here goes to the server (PATCH /me), now or once online.
+            let key = LanguageSettings.accountKey(server: account.server, userID: account.user.id)
+            let language = LanguageSettings.shared
+            language.accountOpened(key, serverLanguage: account.user.language)
+            language.onAccountChoice = { [weak session] k, _ in
+                guard k == key, let session else { return }
+                Task { await Self.pushLanguage(session, key) }
+            }
+            if let session { Task { await Self.pushLanguage(session, key) } }
         }
         do {
             let lib = try Library(ref: ref, account: account, storeURL: url)
@@ -98,8 +113,18 @@ struct OpenLibraryView: View {
         }
     }
 
+    /// Sends a language change made on this device (maybe offline) to the account.
+    private static func pushLanguage(_ session: SessionStore, _ key: String) async {
+        let language = LanguageSettings.shared
+        guard let tag = language.pendingTag(key) else { return }
+        if await session.pushLanguage(tag) { language.pushed(key, tag: tag) }
+    }
+
     /// Switching libraries: save now, push what is pending, then stop.
     private func close() {
+        if let account {
+            LanguageSettings.shared.accountClosed(LanguageSettings.accountKey(server: account.server, userID: account.user.id))
+        }
         guard let library else { return }
         library.deactivate()
         Task {
@@ -113,7 +138,13 @@ struct OpenLibraryView: View {
         switch phase {
         case .active:
             library.activate()
-            if let session { Task { await session.refresh() } }
+            if let session {
+                Task {
+                    await session.refresh()
+                    // Back online: a language change made offline goes out now.
+                    if let account { await Self.pushLanguage(session, LanguageSettings.accountKey(server: account.server, userID: account.user.id)) }
+                }
+            }
         case .background:
             library.deactivate()
             guard !ref.isLocal else { return }

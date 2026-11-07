@@ -22,44 +22,50 @@ struct AccountView: View {
 
     private func form(_ account: StoredAccount) -> some View {
             Form {
-                Section("用户") {
-                    LabeledContent("名称", value: account.user.name)
-                    LabeledContent("用户名", value: account.user.username)
-                    if !account.user.email.isEmpty { LabeledContent("邮箱", value: account.user.email) }
-                    LabeledContent("角色", value: account.user.isAdmin ? "管理员" : "用户")
+                Section(L.user) {
+                    LabeledContent(L.name, value: account.user.name)
+                    LabeledContent(L.username, value: account.user.username)
+                    if !account.user.email.isEmpty { LabeledContent(L.email, value: account.user.email) }
+                    LabeledContent(L.role, value: account.user.isAdmin ? L.admin : L.user)
                 }
-                Section("同步 · \(library.ref.name)") {
-                    LabeledContent("服务器", value: account.server.description)
-                    LabeledContent("状态") { SyncStatusView() }
-                    LabeledContent("笔记", value: "\(engine.liveNotes.count)")
-                    LabeledContent("本设备", value: engine.device)
-                    Button("立即同步") { Task { await engine.sync() } }
+                // The account's language: kept by the server, on all its devices.
+                Section {
+                    LanguagePicker()
+                } footer: {
+                    LanguageHint()
+                }
+                Section(L.syncSection(library.ref.name)) {
+                    LabeledContent(L.server, value: account.server.description)
+                    LabeledContent(L.status) { SyncStatusView() }
+                    LabeledContent(L.notes, value: "\(engine.liveNotes.count)")
+                    LabeledContent(L.thisDevice, value: engine.device)
+                    Button(L.syncNow) { Task { await engine.sync() } }
                         .disabled(engine.state.status == .syncing)
                     if account.user.isAdmin {
-                        Button("打开管理后台") { openURL(account.server.base.appending(path: "admin")) }
+                        Button(L.openAdmin) { openURL(account.server.base.appending(path: "admin")) }
                     }
                 }
                 Section {
                     Button(role: .destructive) { confirmSignOut = true } label: {
-                        if signingOut { ProgressView() } else { Text("退出登录") }
+                        if signingOut { ProgressView() } else { Text(L.signOut) }
                     }
                     .disabled(signingOut)
-                    .confirmationDialog("退出登录？", isPresented: $confirmSignOut) {
-                        Button("退出登录", role: .destructive) { signOut() }
+                    .confirmationDialog(L.signOutTitle, isPresented: $confirmSignOut) {
+                        Button(L.signOut, role: .destructive) { signOut() }
                     } message: {
                         Text(signOutMessage)
                     }
                 } footer: {
-                    Text("退出后，本设备上这个笔记库的副本会被删除；服务器上的数据不受影响。重新登录后会再次下载。")
+                    Text(L.signOutHint)
                 }
             }
             .formStyle(.grouped)
-            .navigationTitle("账户")
+            .navigationTitle(L.account)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button(L.done) { dismiss() } }
             }
     }
 
@@ -67,8 +73,8 @@ struct AccountView: View {
         let s = engine.state
         let unsynced = s.pending + s.blocked
         return unsynced > 0
-            ? "还有 \(unsynced) 条更改没有同步到服务器，退出后会丢失。"
-            : "这台设备的登录令牌会被撤销，本地数据会被删除。"
+            ? L.signOutUnsynced(unsynced)
+            : L.signOutMessage
     }
 
     /// Sync, revoke the token, then delete the local copy (guide 6.10).

@@ -84,6 +84,15 @@ xcrun simctl launch booted app.ivynote -ivyOpenNote "Some title"
   only 401/403 end the session, network errors and 5xx mean offline.
 - Never log tokens, passwords or note content.
 - The admin console is not rebuilt here; admins get a link to `{server}/admin`.
+- Interface language (guide §界面语言): 简体中文 and English, every string
+  from `IvynoteKit/Strings.swift` (one protocol, so a missing translation does
+  not compile; views read it as `L`, other code as `L10n.s`). Order: the
+  signed-in account's `User.language`, then the choice made on this device
+  (remembered), then the system (first supported language, else English).
+  Pickers sit in the library menu, the libraries list and the account sheet;
+  choosing while signed in sends `PATCH /me {language}` ("follow the system"
+  clears it; offline it is kept and sent later). Sign-up sends the language
+  in use. Dates follow the interface language (`LanguageSettings`).
 
 ## Roadmap
 

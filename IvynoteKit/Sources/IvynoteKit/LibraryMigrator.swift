@@ -64,7 +64,7 @@ public struct LibraryMigrator: Sendable {
         case accountNotEmpty
 
         public var errorDescription: String? {
-            "这个账户里已经有笔记。本地笔记库只能迁移到新注册的空账户。"
+            L10n.s.accountNotEmpty
         }
     }
 
@@ -110,7 +110,7 @@ public struct LibraryMigrator: Sendable {
         var ids: [String: String] = [:]
         let readable = Set(files.map(\.up.id))
         for up in content.uploads where !readable.contains(up.id) {
-            result.skippedFiles.append("\(up.name)：无法读取文件")
+            result.skippedFiles.append(L10n.s.cannotReadNamedFile(up.name))
         }
         for (i, f) in files.enumerated() {
             await progress(Progress(phase: .files, done: i, total: files.count))

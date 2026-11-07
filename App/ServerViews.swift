@@ -17,11 +17,11 @@ struct SignInView: View {
                     AuthView(server: server, info: info)
                 } else if let error {
                     ContentUnavailableView {
-                        Label("无法连接服务器", systemImage: "wifi.exclamationmark")
+                        Label(L.cannotConnect, systemImage: "wifi.exclamationmark")
                     } description: {
                         Text(error)
                     } actions: {
-                        Button("重试") { Task { await probe() } }
+                        Button(L.retry) { Task { await probe() } }
                     }
                 } else {
                     ProgressView()
@@ -33,7 +33,7 @@ struct SignInView: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("笔记库", systemImage: "books.vertical") { catalog.open(nil) }
+                    Button(L.libraries, systemImage: "books.vertical") { catalog.open(nil) }
                 }
             }
         }
@@ -83,7 +83,7 @@ struct CloudSignInView: View {
     @State private var migration = MigrationState()
 
     private var region: SyncRegion? { SyncRegion.of(server) }
-    private var serverTitle: String { region.map { "常青笔记 · \($0.title)" } ?? server.host }
+    private var serverTitle: String { region.map { L.officialRegion($0.title) } ?? server.host }
     private var canRegister: Bool { info?.canRegister ?? true }
 
     var body: some View {
@@ -94,8 +94,8 @@ struct CloudSignInView: View {
                 serverSection
                 if promoting == nil && canRegister {
                     Picker("", selection: $mode) {
-                        Text("注册").tag(Mode.register)
-                        Text("登录").tag(Mode.login)
+                        Text(L.register).tag(Mode.register)
+                        Text(L.login).tag(Mode.login)
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
@@ -113,13 +113,13 @@ struct CloudSignInView: View {
                     .disabled(!canSubmit || busy || probing || info == nil)
                 } footer: {
                     if promoting != nil {
-                        Text("本地笔记库只能迁移到新注册的账户。已有账户的话，可以先登录，再在网页版或桌面端的「设置 → 导入」中导入本笔记库导出的内容。")
+                        Text(L.promoteNote)
                     }
                 }
             }
         }
         .formStyle(.grouped)
-        .navigationTitle(promoting == nil ? "登录常青笔记" : "开启多端同步")
+        .navigationTitle(promoting == nil ? L.signInTitle : L.turnOnSyncTitle)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -133,7 +133,7 @@ struct CloudSignInView: View {
                     showCustom = false
                 }
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("取消") { showCustom = false } }
+                    ToolbarItem(placement: .cancellationAction) { Button(L.cancel) { showCustom = false } }
                 }
             }
             #if os(macOS)
@@ -173,11 +173,11 @@ struct CloudSignInView: View {
                         chosen = true
                         server = r.server
                     } label: {
-                        if region == r { Label("常青笔记 · \(r.title)", systemImage: "checkmark") } else { Text("常青笔记 · \(r.title)") }
+                        if region == r { Label(L.officialRegion(r.title), systemImage: "checkmark") } else { Text(L.officialRegion(r.title)) }
                     }
                 }
                 Divider()
-                Button("自定义服务器…", systemImage: "server.rack") { showCustom = true }
+                Button(L.customServerEllipsis, systemImage: "server.rack") { showCustom = true }
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: region == nil ? "server.rack" : "globe")
@@ -197,17 +197,17 @@ struct CloudSignInView: View {
             }
             .buttonStyle(.plain)
         } header: {
-            Text("同步节点")
+            Text(L.syncNode)
         } footer: {
             if let probeError {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(region != nil ? "暂时无法连接这个节点" : probeError).foregroundStyle(.red)
-                    Button("重试") { Task { await probe() } }.font(.footnote)
+                    Text(region != nil ? L.nodeUnreachable : probeError).foregroundStyle(.red)
+                    Button(L.retry) { Task { await probe() } }.font(.footnote)
                 }
             } else if promoting == nil {
-                Text("笔记先保存在本机，联网时自动同步到你的所有设备。")
+                Text(L.signInHint)
             } else if let promoting {
-                Text("注册一个新账户，「\(promoting.name)」会上传到云端，之后在所有设备上同步。")
+                Text(L.promoteHint(promoting.name))
             }
         }
     }
@@ -215,20 +215,20 @@ struct CloudSignInView: View {
     @ViewBuilder private var accountSection: some View {
         Section {
             if mode == .login && promoting == nil {
-                TextField("用户名或邮箱", text: $identity)
+                TextField(L.usernameOrEmail, text: $identity)
                     .textContentType(.username)
                     .autocorrectionDisabled()
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
                     #endif
             } else {
-                TextField("用户名", text: $username)
+                TextField(L.username, text: $username)
                     .textContentType(.username)
                     .autocorrectionDisabled()
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
                     #endif
-                TextField("邮箱（可选）", text: $email)
+                TextField(L.emailOptional, text: $email)
                     .textContentType(.emailAddress)
                     .autocorrectionDisabled()
                     #if os(iOS)
@@ -236,16 +236,16 @@ struct CloudSignInView: View {
                     .textInputAutocapitalization(.never)
                     #endif
             }
-            SecureField(isRegistering ? "密码（至少 8 位）" : "密码", text: $password)
+            SecureField(isRegistering ? L.passwordMin8 : L.password, text: $password)
                 .textContentType(isRegistering ? .newPassword : .password)
                 .onSubmit(submit)
         } footer: {
             if let error {
                 Text(error).foregroundStyle(.red)
             } else if let info, !info.hasUsers, region == nil {
-                Text("这台服务器还没有账户。你创建的第一个账户将成为管理员。")
+                Text(L.firstAdmin)
             } else if promoting != nil, let info, !info.canRegister {
-                Text("这台服务器没有开放注册。").foregroundStyle(.red)
+                Text(L.registrationClosed).foregroundStyle(.red)
             }
         }
     }
@@ -263,17 +263,17 @@ struct CloudSignInView: View {
                 .padding(.vertical, 4)
             } else if let message = migration.error {
                 Text(message).foregroundStyle(.red)
-                Button("继续迁移") { Task { await resume() } }
+                Button(L.continueMigration) { Task { await resume() } }
             }
         } header: {
-            Text("开启多端同步")
+            Text(L.turnOnSyncTitle)
         }
     }
 
     // MARK: Actions
 
     private var isRegistering: Bool { promoting != nil || mode == .register }
-    private var submitTitle: String { promoting != nil ? "注册并开启同步" : (mode == .login ? "登录" : "注册") }
+    private var submitTitle: String { promoting != nil ? L.registerAndSync : (mode == .login ? L.login : L.register) }
 
     private var canSubmit: Bool {
         if isRegistering { return canRegister && !username.isEmpty && !password.isEmpty }
@@ -282,7 +282,7 @@ struct CloudSignInView: View {
 
     private var libraryName: String {
         if let promoting { return promoting.name }
-        if region != nil { return "我的笔记" }
+        if region != nil { return L.defaultLibraryName }
         let site = (info?.siteName ?? "").trimmingCharacters(in: .whitespaces)
         return site.isEmpty || site.lowercased() == "ivynote" ? server.host : site
     }
@@ -326,7 +326,7 @@ struct CloudSignInView: View {
                     try catalog.createSignedIn(target, name: libraryName, token: result.token, user: result.user)
                 }
             } catch let e as APIError where e.status == 401 && !isRegistering {
-                error = "用户名或密码错误"
+                error = L.wrongCredentials
             } catch {
                 self.error = error.localizedDescription
             }
@@ -352,14 +352,14 @@ struct CloudSignInView: View {
             let result = try await migrator.run(content) { p in await state.update(p) }
             let missed = result.rejected.count + result.skippedFiles.count
             if missed > 0 {
-                state.error = "\(missed) 项未能迁移，原内容仍保留在本地笔记库中。"
+                state.error = L10n.s.migrationRejected(missed)
             }
             let ref = try catalog.createSignedIn(account.server, name: libraryName, token: account.token, user: account.user)
             catalog.markMigrated(local.id, to: ref.id)
         } catch let e as LibraryMigrator.Failure {
             state.error = e.localizedDescription
         } catch {
-            state.error = "迁移中断：\(error.localizedDescription)。账户已经创建，点「继续迁移」会从中断处继续，已上传的内容不会重复。"
+            state.error = L10n.s.migrationInterrupted(error.localizedDescription)
         }
     }
 }
@@ -377,12 +377,12 @@ final class MigrationState {
     func update(_ p: LibraryMigrator.Progress) { progress = p }
 
     var text: String {
-        guard let p = progress else { return "正在准备…" }
+        guard let p = progress else { return L10n.s.preparing }
         switch p.phase {
-        case .check: return "正在准备…"
-        case .files: return "正在上传附件 \(p.done)/\(p.total)"
-        case .notes: return "正在上传笔记 \(p.done)/\(p.total)"
-        case .done: return "迁移完成，正在打开…"
+        case .check: return L10n.s.preparing
+        case .files: return L10n.s.uploadingFiles(p.done, p.total)
+        case .notes: return L10n.s.uploadingNotes(p.done, p.total)
+        case .done: return L10n.s.migrationDone
         }
     }
 
@@ -411,7 +411,7 @@ struct CustomServerView: View {
     var body: some View {
         Form {
             Section {
-                TextField("服务器地址", text: $address, prompt: Text("https://notes.example.com"))
+                TextField(L.serverAddress, text: $address, prompt: Text("https://notes.example.com"))
                     .textContentType(.URL)
                     .autocorrectionDisabled()
                     #if os(iOS)
@@ -423,10 +423,10 @@ struct CustomServerView: View {
                 if let error {
                     Text(error).foregroundStyle(.red)
                 } else if let parsed, parsed.isInsecure {
-                    Label("使用 http 连接时，密码和笔记以明文传输，请只在可信的局域网内使用。", systemImage: "exclamationmark.triangle")
+                    Label(L.insecureWarning, systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
                 } else {
-                    Text("连接你自己或团队部署的常青笔记服务器。")
+                    Text(L.customServerHint)
                 }
             }
 
@@ -434,7 +434,7 @@ struct CustomServerView: View {
                 Button(action: connect) {
                     HStack {
                         Spacer()
-                        if checking { ProgressView().controlSize(.small) } else { Text("使用这个服务器") }
+                        if checking { ProgressView().controlSize(.small) } else { Text(L.useServer) }
                         Spacer()
                     }
                 }
@@ -442,7 +442,7 @@ struct CustomServerView: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("自定义服务器")
+        .navigationTitle(L.customServer)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -501,8 +501,8 @@ struct AuthView: View {
 
             if info.canRegister && !firstAccount {
                 Picker("", selection: $mode) {
-                    Text("登录").tag(Mode.login)
-                    Text("注册").tag(Mode.register)
+                    Text(L.login).tag(Mode.login)
+                    Text(L.register).tag(Mode.register)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -511,30 +511,30 @@ struct AuthView: View {
 
             Section {
                 if mode == .login {
-                    TextField("用户名或邮箱", text: $identity)
+                    TextField(L.usernameOrEmail, text: $identity)
                         .textContentType(.username)
                         .autocorrectionDisabled()
                         #if os(iOS)
                         .textInputAutocapitalization(.never)
                         #endif
                 } else {
-                    TextField("用户名", text: $username)
+                    TextField(L.username, text: $username)
                         .textContentType(.username)
                         .autocorrectionDisabled()
                         #if os(iOS)
                         .textInputAutocapitalization(.never)
                         #endif
-                    TextField("邮箱（可选）", text: $email)
+                    TextField(L.emailOptional, text: $email)
                         .textContentType(.emailAddress)
                         .autocorrectionDisabled()
                         #if os(iOS)
                         .keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never)
                         #endif
-                    TextField("显示名（可选）", text: $displayName)
+                    TextField(L.displayNameOptional, text: $displayName)
                         .textContentType(.name)
                 }
-                SecureField("密码", text: $password)
+                SecureField(L.password, text: $password)
                     .textContentType(mode == .login ? .password : .newPassword)
                     .onSubmit(submit)
             } header: {
@@ -543,7 +543,7 @@ struct AuthView: View {
                 if let error {
                     Text(error).foregroundStyle(.red)
                 } else if firstAccount {
-                    Text("这台服务器还没有账户。你创建的第一个账户将成为管理员。")
+                    Text(L.firstAdmin)
                 }
             }
 
@@ -551,7 +551,7 @@ struct AuthView: View {
                 Button(action: submit) {
                     HStack {
                         Spacer()
-                        if busy { ProgressView().controlSize(.small) } else { Text(mode == .login ? "登录" : "创建账户") }
+                        if busy { ProgressView().controlSize(.small) } else { Text(mode == .login ? L.login : L.createAccount) }
                         Spacer()
                     }
                 }
@@ -559,7 +559,7 @@ struct AuthView: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle(mode == .login ? "登录" : "注册")
+        .navigationTitle(mode == .login ? L.login : L.register)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -593,7 +593,7 @@ struct AuthView: View {
                 try session.signIn(server: server, token: result.token, user: result.user)
                 password = ""
             } catch let e as APIError where e.status == 401 && mode == .login {
-                error = "用户名或密码错误"
+                error = L.wrongCredentials
             } catch {
                 self.error = error.localizedDescription
             }

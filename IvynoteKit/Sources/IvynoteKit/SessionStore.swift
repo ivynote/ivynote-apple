@@ -92,6 +92,28 @@ public final class SessionStore {
         state = .signedIn(account)
     }
 
+    /// Saves the account's interface language on the server (`PATCH /me`).
+    /// False when it could not be sent (offline): the caller tries again later.
+    @discardableResult
+    public func pushLanguage(_ tag: String) async -> Bool {
+        guard let current = account, let api else { return false }
+        do {
+            let user = try await api.setLanguage(tag)
+            guard account?.token == current.token else { return true }
+            var updated = current
+            updated.user = user
+            try? store.save(updated)
+            state = .signedIn(updated)
+            return true
+        } catch let error as APIError {
+            if error.endsSession { expire(error) }
+            // A refused tag will not succeed later either.
+            return !error.isTransient
+        } catch {
+            return false
+        }
+    }
+
     /// Revokes this device's token (best effort) and forgets the account.
     /// Once the local database exists this must sync first, then clear it.
     public func signOut() async {
@@ -112,8 +134,8 @@ public final class SessionStore {
         // kept (guide 5.1): signing in again resumes syncing them.
         try? store.clear()
         notice = error.status == 403
-            ? (error.errorDescription ?? "账户不可用")
-            : "登录已过期，请重新登录"
+            ? (error.errorDescription ?? L10n.s.accountUnavailable)
+            : L10n.s.sessionExpired
         isOffline = false
         state = .signedOut
     }

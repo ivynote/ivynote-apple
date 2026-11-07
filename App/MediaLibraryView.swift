@@ -34,11 +34,11 @@ struct MediaLibraryView: View {
                     ProgressView()
                 }
             }
-            .navigationTitle("媒体库")
+            .navigationTitle(L.mediaLibrary)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .searchable(text: $query, prompt: "搜索文件名")
+            .searchable(text: $query, prompt: L.searchFiles)
             .toolbar { toolbar }
             .navigationDestination(for: String.self) { id in
                 if let loader {
@@ -50,8 +50,8 @@ struct MediaLibraryView: View {
                 }
             }
             .modifier(AttachmentPickers(state: $pickers) { files in upload(files) })
-            .alert("出错了", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
-                Button("好", role: .cancel) {}
+            .alert(L.error, isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+                Button(L.ok, role: .cancel) {}
             } message: { Text(error ?? "") }
             .overlay(alignment: .bottom) { NoticeToast(text: $notice) }
         }
@@ -77,7 +77,7 @@ struct MediaLibraryView: View {
             VStack(alignment: .leading, spacing: 14) {
                 filterBar
                 if offline {
-                    Label("离线 · 显示已同步的文件信息", systemImage: "wifi.slash")
+                    Label(L.mediaOffline, systemImage: "wifi.slash")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let banner = orphanBanner {
@@ -85,7 +85,7 @@ struct MediaLibraryView: View {
                         Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
                         Text(banner).font(.footnote)
                         Spacer()
-                        Button("查看并清理") { filter = .orphaned }.font(.footnote)
+                        Button(L.reviewAndClean) { filter = .orphaned }.font(.footnote)
                     }
                     .padding(12)
                     .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -94,9 +94,9 @@ struct MediaLibraryView: View {
                     queued
                 }
                 if items.isEmpty && !loading {
-                    ContentUnavailableView(filter == .trash ? "回收站是空的" : query.isEmpty ? "还没有文件" : "没有匹配的文件",
+                    ContentUnavailableView(filter == .trash ? L.mediaTrashEmpty : query.isEmpty ? L.noFiles : L.noMatchingFiles,
                                            systemImage: filter == .trash ? "trash" : "photo.on.rectangle",
-                                           description: Text(filter == .all && query.isEmpty ? "在笔记中插入图片或文件，就会出现在这里。" : ""))
+                                           description: Text(filter == .all && query.isEmpty ? L.noFilesHint : ""))
                         .frame(maxWidth: .infinity)
                         .padding(.top, 40)
                 } else {
@@ -137,7 +137,7 @@ struct MediaLibraryView: View {
 
     private var queued: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("等待上传 \(engine.uploads.count)").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            Text(L.waitingUploads(engine.uploads.count)).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
             ForEach(engine.uploads.values.sorted { $0.createdAt > $1.createdAt }) { u in
                 HStack(spacing: 10) {
                     AttachmentThumbnail(id: u.id, kind: u.kind, hasThumb: false)
@@ -145,7 +145,7 @@ struct MediaLibraryView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     VStack(alignment: .leading) {
                         Text(u.name).lineLimit(1)
-                        Text(u.failed.map { "未能上传：\($0)" } ?? (engine.isLocal ? "保存在本机" : "联网后自动上传"))
+                        Text(u.failed.map { L.notUploaded($0) } ?? (engine.isLocal ? L.savedOnDevice : L.uploadsWhenOnline))
                             .font(.caption).foregroundStyle(u.failed == nil ? Color.secondary : Color.red)
                     }
                     Spacer()
@@ -153,25 +153,25 @@ struct MediaLibraryView: View {
                 }
             }
             if engine.uploads.values.contains(where: { $0.failed != nil }) {
-                Button("重新上传") { engine.retryFailedUploads() }.font(.footnote)
+                Button(L.retryUpload) { engine.retryFailedUploads() }.font(.footnote)
             }
         }
     }
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
+        ToolbarItem(placement: .cancellationAction) { Button(L.close) { dismiss() } }
         ToolbarItem(placement: .primaryAction) {
             Menu {
-                Button("照片或视频", systemImage: "photo.on.rectangle") { pickers.photos = true }
+                Button(L.photoOrVideo, systemImage: "photo.on.rectangle") { pickers.photos = true }
                 if AttachmentPickerState.cameraAvailable {
-                    Button("拍照", systemImage: "camera") { pickers.camera = true }
+                    Button(L.camera, systemImage: "camera") { pickers.camera = true }
                 }
-                Button("文件", systemImage: "doc") { pickers.files = true }
+                Button(L.file, systemImage: "doc") { pickers.files = true }
             } label: {
-                if uploading > 0 { ProgressView().controlSize(.small) } else { Label("上传", systemImage: "square.and.arrow.up") }
+                if uploading > 0 { ProgressView().controlSize(.small) } else { Label(L.upload, systemImage: "square.and.arrow.up") }
             }
             .disabled(library.api == nil)
-            .help("上传文件")
+            .help(L.uploadFiles)
         }
     }
 
@@ -198,8 +198,8 @@ struct MediaLibraryView: View {
     private var orphanBanner: String? {
         guard filter == .all, let list, !offline, let n = list.counts["orphaned"], n > 0 else { return nil }
         return list.policy.orphanDays > 0
-            ? "\(n) 个文件没有被任何笔记引用，将在 \(list.policy.orphanDays) 天后自动移入回收站。"
-            : "\(n) 个文件没有被任何笔记引用。"
+            ? L.orphanBanner(n, list.policy.orphanDays)
+            : L.orphanBannerNoDays(n)
     }
 
     private func load() async {
@@ -237,13 +237,13 @@ struct MediaLibraryView: View {
                         if res.duplicate { dedup += 1 }
                     } else {
                         _ = try await engine.addFile(f.data, name: f.name, mime: f.mime)
-                        notice = "已保存在本机，联网后自动上传"
+                        notice = L.savedLocallyUploadLater
                     }
                 } catch {
-                    self.error = "「\(f.name)」上传失败：\(error.localizedDescription)"
+                    self.error = L.uploadFailed(f.name, error.localizedDescription)
                 }
             }
-            if dedup > 0 { notice = "重复文件已合并" }
+            if dedup > 0 { notice = L.duplicateMerged }
             await load()
         }
     }
@@ -274,9 +274,9 @@ private struct MediaTile: View {
     private var usage: String {
         let size = attachment.size.byteText
         if attachment.isTrashed { return size }
-        if attachment.refs > 0 { return "\(size) · 被 \(attachment.refs) 篇引用" }
-        if let days = AttachmentDetailView.cleanupDays(attachment, policy: policy) { return "未引用 · \(days) 天后清理" }
-        return "\(size) · 未引用"
+        if attachment.refs > 0 { return "\(size) · \(L.usedIn(attachment.refs))" }
+        if let days = AttachmentDetailView.cleanupDays(attachment, policy: policy) { return L.cleanupIn(days) }
+        return "\(size) · \(L.unreferenced)"
     }
 }
 
@@ -313,34 +313,34 @@ struct AttachmentDetailView: View {
                 Form {
                     Section { preview(a) }
                     Section {
-                        LabeledContent("名称") {
+                        LabeledContent(L.name) {
                             Text(a.name).multilineTextAlignment(.trailing).textSelection(.enabled)
                         }
-                        LabeledContent("类型", value: typeText(a))
-                        LabeledContent("存储", value: a.storage == "s3" ? (policy.cdn ? "S3 · 已开启 CDN · 已加密" : "S3 · 已加密") : "服务器磁盘 · 已加密")
+                        LabeledContent(L.type, value: typeText(a))
+                        LabeledContent(L.storage, value: a.storage == "s3" ? (policy.cdn ? L.storageS3CDN : L.storageS3) : L.storageDisk)
                         if !a.sha256.isEmpty {
-                            LabeledContent("指纹") {
+                            LabeledContent(L.fingerprint) {
                                 Text("\(a.sha256.prefix(12))…\(a.sha256.suffix(4))").font(.system(.footnote, design: .monospaced))
                             }
                         }
-                        LabeledContent("本地引用") {
+                        LabeledContent(L.localReference) {
                             Text("ivy://res/\(a.id)").font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
                         }
                         if a.public {
-                            LabeledContent("公网链接") {
+                            LabeledContent(L.publicUrl) {
                                 Text(publicURL ?? (a.publicUrl.isEmpty ? "/r/…" : a.publicUrl))
                                     .font(.system(.footnote, design: .monospaced)).lineLimit(2).textSelection(.enabled)
                             }
                         }
-                        LabeledContent("上传于", value: Date(timeIntervalSince1970: Double(a.createdAt) / 1000).formatted(date: .long, time: .shortened))
+                        LabeledContent(L.uploadedAt, value: Date(timeIntervalSince1970: Double(a.createdAt) / 1000).formatted(Date.FormatStyle(date: .long, time: .shortened).locale(L.locale)))
                         if a.isTrashed {
-                            LabeledContent("移入回收站", value: Date(timeIntervalSince1970: Double(a.trashedAt) / 1000).formatted(date: .long, time: .shortened))
+                            LabeledContent(L.trashedAt, value: Date(timeIntervalSince1970: Double(a.trashedAt) / 1000).formatted(Date.FormatStyle(date: .long, time: .shortened).locale(L.locale)))
                         }
                     }
                     Section(references(a)) {
                         ForEach(detail?.notes ?? []) { n in
                             Button { openNote(n.id) } label: {
-                                Label(n.title.isEmpty ? "无标题" : n.title, systemImage: "doc.text")
+                                Label(n.title.isEmpty ? L.untitled : n.title, systemImage: "doc.text")
                             }
                             .disabled(engine.notes[n.id] == nil)
                         }
@@ -356,7 +356,7 @@ struct AttachmentDetailView: View {
                 .toolbar {
                     if !a.isTrashed {
                         ToolbarItem(placement: .primaryAction) {
-                            Button("重命名", systemImage: "pencil") {
+                            Button(L.rename, systemImage: "pencil") {
                                 nameDraft = a.name
                                 renaming = true
                             }
@@ -364,21 +364,21 @@ struct AttachmentDetailView: View {
                     }
                 }
             } else {
-                ContentUnavailableView("文件不存在", systemImage: "questionmark.folder")
+                ContentUnavailableView(L.fileNotFound, systemImage: "questionmark.folder")
             }
         }
-        .alert("重命名文件", isPresented: $renaming) {
-            TextField("文件名", text: $nameDraft)
-            Button("取消", role: .cancel) {}
-            Button("保存") { rename() }
+        .alert(L.renameFile, isPresented: $renaming) {
+            TextField(L.fileName, text: $nameDraft)
+            Button(L.cancel, role: .cancel) {}
+            Button(L.save) { rename() }
         }
-        .confirmationDialog("永久删除这个文件？", isPresented: $confirmPurge, titleVisibility: .visible) {
-            Button("永久删除", role: .destructive) { act(.purge) }
+        .confirmationDialog(L.purgeFileTitle, isPresented: $confirmPurge, titleVisibility: .visible) {
+            Button(L.deleteForever, role: .destructive) { act(.purge) }
         } message: {
-            Text("引用它的笔记将无法显示它。此操作无法撤销。")
+            Text(L.purgeFileMessage)
         }
-        .alert("出错了", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
-            Button("好", role: .cancel) {}
+        .alert(L.error, isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+            Button(L.ok, role: .cancel) {}
         } message: { Text(error ?? "") }
         .overlay(alignment: .bottom) { NoticeToast(text: $notice) }
         .quickLookPreview($quickLook)
@@ -408,39 +408,39 @@ struct AttachmentDetailView: View {
         }
         .padding(.vertical, 6)
         if a.kind != "image" || image != nil {
-            Button("预览", systemImage: "eye") { Task { await openPreview(a) } }
+            Button(L.preview, systemImage: "eye") { Task { await openPreview(a) } }
         }
     }
 
     @ViewBuilder private func actions(_ a: Attachment) -> some View {
         if a.isTrashed {
             Section {
-                Button("恢复", systemImage: "arrow.uturn.backward") { act(.restore) }
-                Button("永久删除", systemImage: "trash.slash", role: .destructive) { confirmPurge = true }
+                Button(L.restore, systemImage: "arrow.uturn.backward") { act(.restore) }
+                Button(L.deleteForever, systemImage: "trash.slash", role: .destructive) { confirmPurge = true }
             }
         } else {
             Section {
-                Button(a.public ? "复制公网链接" : "生成公网链接", systemImage: "globe") { act(.publish) }
+                Button(a.public ? L.copyPublicUrl : L.makePublicUrl, systemImage: "globe") { act(.publish) }
                 if a.public {
-                    Button("撤销公网链接", systemImage: "xmark.circle") { act(.unpublish) }
+                    Button(L.revokePublicUrl, systemImage: "xmark.circle") { act(.unpublish) }
                 }
             } footer: {
-                Text("公网链接不再受登录保护，任何拿到地址的人都能打开这个文件。")
+                Text(L.publicFilesHint)
             }
             Section {
-                Button("复制引用", systemImage: "doc.on.doc") {
+                Button(L.copyReference, systemImage: "doc.on.doc") {
                     Clipboard.copy(a.markdown)
-                    notice = "已复制"
+                    notice = L.copied
                 }
-                Button("下载原文件", systemImage: "square.and.arrow.down") { Task { await save(a) } }
-                Button("移到回收站", systemImage: "trash", role: .destructive) { act(.trash) }
+                Button(L.downloadOriginal, systemImage: "square.and.arrow.down") { Task { await save(a) } }
+                Button(L.moveToTrash, systemImage: "trash", role: .destructive) { act(.trash) }
             }
         }
     }
 
     private func references(_ a: Attachment) -> String {
         let n = detail?.notes.count ?? a.refs
-        return n > 0 ? "被 \(n) 篇笔记引用" : "未引用"
+        return n > 0 ? L.referencedBy(n) : L.unreferenced
     }
 
     private func typeText(_ a: Attachment) -> String {
@@ -494,7 +494,7 @@ struct AttachmentDetailView: View {
                     let url = try await api.publishAttachment(id)
                     publicURL = url
                     Clipboard.copy(url)
-                    notice = "公网链接已复制"
+                    notice = L.publicUrlCopied
                 case .unpublish:
                     engine.putAttachment(try await api.unpublishAttachment(id))
                     publicURL = nil

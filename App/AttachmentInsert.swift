@@ -29,9 +29,9 @@ final class AttachmentInserter {
                 do {
                     let added = try await engine.addFile(f.data, name: f.name, mime: f.mime)
                     place(added, in: noteID, engine: engine, host: host)
-                    if added.local && !engine.isLocal { notice = "「\(added.name)」已保存在本机，联网后自动上传" }
+                    if added.local && !engine.isLocal { notice = L10n.s.savedLocally(added.name) }
                 } catch {
-                    notice = "「\(f.name)」上传失败：\(error.localizedDescription)"
+                    notice = L10n.s.uploadFailed(f.name, error.localizedDescription)
                 }
             }
         }
@@ -131,14 +131,14 @@ struct InsertMenu: View {
     @Binding var pickers: AttachmentPickerState
 
     var body: some View {
-        Menu("插入附件", systemImage: "paperclip") {
-            Button("照片或视频", systemImage: "photo.on.rectangle") { pickers.photos = true }
+        Menu(L.insertAttachment, systemImage: "paperclip") {
+            Button(L.photoOrVideo, systemImage: "photo.on.rectangle") { pickers.photos = true }
             if AttachmentPickerState.cameraAvailable {
-                Button("拍照", systemImage: "camera") { pickers.camera = true }
+                Button(L.camera, systemImage: "camera") { pickers.camera = true }
             }
-            Button("文件", systemImage: "doc") { pickers.files = true }
+            Button(L.file, systemImage: "doc") { pickers.files = true }
         }
-        .help("插入图片或文件")
+        .help(L.insertAttachmentHelp)
     }
 }
 

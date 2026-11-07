@@ -39,8 +39,10 @@ public struct User: Codable, Equatable, Identifiable, Sendable {
     public var role: String
     public var status: String
     public var aiAvailable: Bool
+    /// The interface language the user chose (`zh`, `en`…); "" follows the device.
+    public var language: String
 
-    public init(id: String, username: String, email: String = "", displayName: String = "", role: String = "user", status: String = "active", aiAvailable: Bool = false) {
+    public init(id: String, username: String, email: String = "", displayName: String = "", role: String = "user", status: String = "active", aiAvailable: Bool = false, language: String = "") {
         self.id = id
         self.username = username
         self.email = email
@@ -48,6 +50,7 @@ public struct User: Codable, Equatable, Identifiable, Sendable {
         self.role = role
         self.status = status
         self.aiAvailable = aiAvailable
+        self.language = language
     }
 
     public init(from decoder: Decoder) throws {
@@ -59,6 +62,7 @@ public struct User: Codable, Equatable, Identifiable, Sendable {
         role = try c.decodeIfPresent(String.self, forKey: .role) ?? "user"
         status = try c.decodeIfPresent(String.self, forKey: .status) ?? "active"
         aiAvailable = try c.decodeIfPresent(Bool.self, forKey: .aiAvailable) ?? false
+        language = try c.decodeIfPresent(String.self, forKey: .language) ?? ""
     }
 
     public var name: String { displayName.isEmpty ? username : displayName }
@@ -80,12 +84,12 @@ struct AuthResponse: Decodable, Sendable {
 public enum Validation {
     public static func username(_ s: String) -> String? {
         s.wholeMatch(of: /[A-Za-z0-9][A-Za-z0-9_.\-]{1,31}/) == nil
-            ? "用户名为 2–32 位字母、数字、_ . -，以字母或数字开头" : nil
+            ? L10n.s.usernameRule : nil
     }
 
     public static func password(_ s: String) -> String? {
-        if s.count < 8 { return "密码至少 8 个字符" }
-        if s.utf8.count > 72 { return "密码最多 72 字节" }
+        if s.count < 8 { return L10n.s.passwordTooShort }
+        if s.utf8.count > 72 { return L10n.s.passwordTooLong }
         return nil
     }
 }

@@ -33,7 +33,7 @@ import { livePreview, type PreviewOptions } from '@ivynote/editor/livePreview';
 import { baseTheme, markdownHighlight } from '@ivynote/editor/theme';
 import { wikiCompletion } from '@ivynote/editor/wikiComplete';
 import { dateCompletion, openDuePicker } from '@ivynote/editor/dates';
-import { insertMenu, openInsertMenu, slashCompletion } from '@ivynote/editor/insert';
+import { insertMenu, insertMenuLook, openInsertMenu, slashCompletion } from '@ivynote/editor/insert';
 import { selectionToolbar } from '@ivynote/editor/bubble';
 import { Protection } from '@ivynote/editor/protection';
 import { normalizeTitle } from '@ivynote/core/markdown/links';
@@ -128,7 +128,7 @@ function extensions(readonly: boolean) {
 		EditorView.lineWrapping,
 		placeholderConf.of(placeholder(w().placeholder)),
 		// "/" opens the insert menu; photos and files are picked by the app.
-		autocompletion({ override: [slashCompletion({ hosts: ['image', 'file'], host: (kind) => post({ type: 'pick', kind }) }), dateCompletion, wikiCompletion(completions)], icons: false, activateOnTyping: true, maxRenderedOptions: 40 }),
+		autocompletion({ override: [slashCompletion({ hosts: ['image', 'file'], host: (kind) => post({ type: 'pick', kind }) }), dateCompletion, wikiCompletion(completions)], icons: false, activateOnTyping: true, maxRenderedOptions: 40, ...insertMenuLook }),
 		insertMenu(),
 		selectionToolbar(),
 		keymap.of([

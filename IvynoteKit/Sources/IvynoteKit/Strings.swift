@@ -366,6 +366,7 @@ public protocol Strings: Sendable {
     var agendaToday: String { get }
     var agendaLater: String { get }
     var dateAndReminder: String { get }
+    var formatInsert: String { get }
     var protectNote: String { get }
     var changeNotePassword: String { get }
     var removeNotePassword: String { get }
@@ -750,6 +751,7 @@ public struct ZhStrings: Strings {
     public let agendaToday = "今天"
     public let agendaLater = "接下来"
     public let dateAndReminder = "日期与提醒"
+    public let formatInsert = "插入"
     public let protectNote = "设置密码…"
     public let changeNotePassword = "更改密码…"
     public let removeNotePassword = "移除密码"
@@ -1148,6 +1150,7 @@ public struct EnStrings: Strings {
     public let agendaToday = "Today"
     public let agendaLater = "Coming up"
     public let dateAndReminder = "Date & reminder"
+    public let formatInsert = "Insert"
     public let protectNote = "Protect with password…"
     public let changeNotePassword = "Change password…"
     public let removeNotePassword = "Remove password"

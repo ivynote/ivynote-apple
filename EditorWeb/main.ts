@@ -15,7 +15,10 @@
 //   protection {id, protected, locked}
 //                      whether the open note has a password, and is locked
 //
-// command() also takes: due (date picker for the task at the cursor),
+//   pick {kind}        the insert menu asks for a photo ('image') or a file ('file')
+//
+// command() also takes: insert (the "/" menu at the cursor, for a ＋ button),
+// due (date picker for the task at the cursor),
 // protect / unprotect / changePassword / lock (guide 8.4). A protected note's
 // body only ever leaves this page sealed.
 
@@ -30,6 +33,8 @@ import { livePreview, type PreviewOptions } from '@ivynote/editor/livePreview';
 import { baseTheme, markdownHighlight } from '@ivynote/editor/theme';
 import { wikiCompletion } from '@ivynote/editor/wikiComplete';
 import { dateCompletion, openDuePicker } from '@ivynote/editor/dates';
+import { insertMenu, openInsertMenu, slashCompletion } from '@ivynote/editor/insert';
+import { selectionToolbar } from '@ivynote/editor/bubble';
 import { Protection } from '@ivynote/editor/protection';
 import { normalizeTitle } from '@ivynote/core/markdown/links';
 import { renderMarkdown } from '@ivynote/core/markdown/render';
@@ -122,7 +127,10 @@ function extensions(readonly: boolean) {
 		baseTheme,
 		EditorView.lineWrapping,
 		placeholderConf.of(placeholder(w().placeholder)),
-		autocompletion({ override: [dateCompletion, wikiCompletion(completions)], icons: false, activateOnTyping: true }),
+		// "/" opens the insert menu; photos and files are picked by the app.
+		autocompletion({ override: [slashCompletion({ hosts: ['image', 'file'], host: (kind) => post({ type: 'pick', kind }) }), dateCompletion, wikiCompletion(completions)], icons: false, activateOnTyping: true, maxRenderedOptions: 40 }),
+		insertMenu(),
+		selectionToolbar(),
 		keymap.of([
 			{ key: 'Mod-b', run: (v) => toggleWrap(v, '**', w().bold) },
 			{ key: 'Mod-i', run: (v) => toggleWrap(v, '*', w().italic) },
@@ -137,6 +145,8 @@ function extensions(readonly: boolean) {
 			{ key: 'Mod-Shift-8', run: (v) => toggleLinePrefix(v, '- ') },
 			{ key: 'Mod-Shift-9', run: (v) => toggleLinePrefix(v, '- [ ] ') },
 			{ key: 'Mod-Shift-d', run: (v) => (openDuePicker(v), true) },
+			{ key: 'Mod-/', run: openInsertMenu },
+			{ key: 'Mod-Shift-h', run: (v) => toggleWrap(v, '==') },
 			...closeBracketsKeymap,
 			...completionKeymap,
 			...searchKeymap,
@@ -414,6 +424,7 @@ window.ivy = {
 		if (!view) return;
 		switch (name) {
 			case 'due': openDuePicker(view); return;
+			case 'insert': openInsertMenu(view); return;
 			case 'bold': toggleWrap(view, '**', w().bold); break;
 			case 'italic': toggleWrap(view, '*', w().italic); break;
 			case 'strike': toggleWrap(view, '~~', w().strike); break;

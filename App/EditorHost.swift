@@ -26,6 +26,8 @@ final class EditorHost: NSObject {
     /// The body the page has, to skip echoing its own edits back to it.
     @ObservationIgnored private var pageBody = ""
     @ObservationIgnored var onOpenNote: ((_ id: String, _ title: String) -> Void)?
+    /// The insert menu asks for a photo ("image") or a file ("file").
+    @ObservationIgnored var onPick: ((_ kind: String) -> Void)?
     /// Files pasted or dropped into the editor.
     @ObservationIgnored var onFiles: ((_ files: [DroppedFile]) -> Void)?
     /// Shows documents without editing them (history versions): no changes,
@@ -187,6 +189,9 @@ final class EditorHost: NSObject {
                 return DroppedFile(name: name, mime: mime, data: data)
             }
             if !files.isEmpty { onFiles?(files) }
+        case "pick":
+            guard !readonly else { return }
+            onPick?(m["kind"] as? String ?? "")
         case "focus":
             focused = m["focused"] as? Bool ?? false
         case "protection":

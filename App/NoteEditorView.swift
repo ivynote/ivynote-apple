@@ -104,6 +104,11 @@ struct NoteEditorView: View {
                 host.setLanguage(LanguageSettings.shared.current)
                 host.open(note, focus: note.body.isEmpty && note.title.isEmpty && !note.isTrashed)
                 let inserter = inserter, engine = engine, host = host, id = noteID
+                // Photos and files chosen from the editor's insert menu ("/" or ＋).
+                let pickers = $pickers
+                host.onPick = { kind in
+                    if kind == "image" { pickers.wrappedValue.photos = true } else { pickers.wrappedValue.files = true }
+                }
                 host.onFiles = { [weak host] files in
                     guard let host else { return }
                     inserter.add(files.map { .init(name: $0.name, mime: $0.mime, data: $0.data) }, to: id, engine: engine, host: host)
@@ -352,6 +357,7 @@ struct FormatBar: View {
     @Binding var pickers: AttachmentPickerState
 
     private let items: [(String, String, String)] = [
+        ("insert", "plus", L.formatInsert),
         ("h1", "number", L.sortTitle),
         ("bold", "bold", L.formatBold),
         ("italic", "italic", L.formatItalic),

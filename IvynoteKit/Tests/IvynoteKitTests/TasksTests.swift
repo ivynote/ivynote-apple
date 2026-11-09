@@ -54,4 +54,23 @@ struct TasksTests {
         #expect(Tasks.toggle("- [ ] plain", line: 0, today: today, calendar: cal) == "- [x] plain")
         #expect(Tasks.toggle("text", line: 0, today: today, calendar: cal) == "text")
     }
+
+    @Test func groupsTheAgendaByDay() {
+        let cal = shanghai
+        let days = ["2026-11-01", "2026-11-09", "2026-11-10", "2026-11-12", "2026-11-12", "2026-11-16", "2026-12-03"]
+        let body = days.enumerated().map { "- [ ] t\($0.offset) 📅 \($0.element)" }.joined(separator: "\n")
+        let today = cal.date(from: DateComponents(year: 2026, month: 11, day: 9))!
+        let tree = Tasks.agendaTree(Tasks.agenda([Note(id: "t", title: "t", body: body, createdAt: 1, updatedAt: 1)], today: today, calendar: cal))
+        #expect(tree.map(\.key) == ["overdue", "d:2026-11-09", "d:2026-11-10", "d:2026-11-12", "m:2026-11", "m:2026-12"])
+        #expect(tree.map(\.items.count) == [1, 1, 1, 2, 1, 1])
+        #expect(tree[1].openByDefault && !tree[3].openByDefault)
+    }
+
+    @Test func namesDaysAndMonths() {
+        let today = Tasks.Due(year: 2026, month: 11, day: 9, hour: nil, minute: nil)
+        #expect(ZhStrings().agendaDay(today, today: today) == "今天 · 11月9日 周一")
+        #expect(EnStrings().agendaDay(Tasks.Due(year: 2026, month: 11, day: 10, hour: nil, minute: nil), today: today) == "Tomorrow · Tue, Nov 10")
+        #expect(ZhStrings().agendaMonth(Tasks.Due(year: 2026, month: 11, day: 1, hour: nil, minute: nil), today: today) == "本月稍后")
+        #expect(EnStrings().agendaMonth(Tasks.Due(year: 2027, month: 1, day: 1, hour: nil, minute: nil), today: today) == "January 2027")
+    }
 }

@@ -1,36 +1,60 @@
 import IvynoteKit
 import SwiftUI
 
-/// The agenda (guide 11.8): open to-dos with a 📅 date across the library,
-/// overdue first. Checking one off writes the note as the editor would; a
-/// tap opens the note at the task.
+/// The agenda (guide 11.8): open to-dos with a 📅 date across the library as
+/// a tree by day — overdue, each day of the coming week, then by month — the
+/// same branches as the web. Checking one off writes the note as the editor
+/// would; a tap opens the note at the task.
 struct AgendaView: View {
     @Environment(SyncEngine.self) private var engine
     @Environment(\.dismiss) private var dismiss
     /// Opens a note at a 0-based line.
     let open: (_ id: String, _ line: Int) -> Void
 
-    private var items: [Tasks.AgendaItem] { Tasks.agenda(engine.notes.values) }
+    /// Folded and unfolded branches, remembered on this device: for branches
+    /// open by default a stored key means folded, for the others unfolded.
+    @AppStorage("ivy.agenda.toggled") private var toggledRaw = ""
+
+    private var toggled: Set<String> { Set(toggledRaw.split(separator: "\n").map(String.init)) }
+
+    private func isOpen(_ n: Tasks.AgendaNode) -> Bool { n.openByDefault != toggled.contains(n.key) }
+
+    private func binding(_ n: Tasks.AgendaNode, live: Set<String>) -> Binding<Bool> {
+        Binding(
+            get: { isOpen(n) },
+            set: { open in
+                var keys = toggled.filter { live.contains($0) }
+                if open == n.openByDefault { keys.remove(n.key) } else { keys.insert(n.key) }
+                toggledRaw = keys.sorted().joined(separator: "\n")
+            }
+        )
+    }
+
     private var anyProtected: Bool {
         engine.notes.values.contains { !$0.deleted && !$0.isTrashed && NoteLock.isEncrypted($0.body) }
     }
 
-    private func group(_ days: Int) -> String {
-        days < 0 ? L.agendaOverdue : days == 0 ? L.agendaToday : L.agendaLater
-    }
-
     var body: some View {
         NavigationStack {
-            let list = items
-            let groups = [L.agendaOverdue, L.agendaToday, L.agendaLater].filter { g in list.contains { group($0.days) == g } }
+            let tree = Tasks.agendaTree(Tasks.agenda(engine.notes.values))
+            let live = Set(tree.map(\.key))
+            let today = Tasks.Due(date: Date())
             List {
-                if list.isEmpty {
+                if tree.isEmpty {
                     ContentUnavailableView(L.agendaEmpty, systemImage: "calendar", description: Text(L.agendaEmptyHint))
                 }
-                ForEach(groups, id: \.self) { g in
-                    Section(g) {
-                        ForEach(list.filter { group($0.days) == g }.map { ("\($0.noteId):\($0.task.line)", $0) }, id: \.0) { pair in
-                            AgendaRow(item: pair.1, toggle: { toggle(pair.1) }, open: { open(pair.1.noteId, pair.1.task.line) })
+                ForEach(tree) { node in
+                    Section(isExpanded: binding(node, live: live)) {
+                        ForEach(node.items.map { ("\($0.noteId):\($0.task.line)", $0) }, id: \.0) { pair in
+                            AgendaRow(item: pair.1, showsDay: node.kind == .overdue || node.kind == .month,
+                                      toggle: { toggle(pair.1) }, open: { open(pair.1.noteId, pair.1.task.line) })
+                        }
+                    } header: {
+                        HStack {
+                            Label(label(node, today: today), systemImage: node.kind == .overdue ? "exclamationmark.circle" : "calendar")
+                                .foregroundStyle(node.kind == .overdue ? Color.red : node.kind == .today ? Color.accentColor : Color.primary)
+                            Spacer()
+                            Text("\(node.items.count)").foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -38,6 +62,7 @@ struct AgendaView: View {
                     Text(L.agendaProtectedHint).font(.footnote).foregroundStyle(.secondary)
                 }
             }
+            .listStyle(.sidebar)
             .navigationTitle(L.agenda)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -51,6 +76,14 @@ struct AgendaView: View {
         #endif
     }
 
+    private func label(_ n: Tasks.AgendaNode, today: Tasks.Due) -> String {
+        switch n.kind {
+        case .overdue: return L.agendaOverdue
+        case .month: return n.date.map { L.agendaMonth($0, today: today) } ?? ""
+        default: return n.date.map { L.agendaDay($0, today: today) } ?? ""
+        }
+    }
+
     private func toggle(_ item: Tasks.AgendaItem) {
         guard let note = engine.notes[item.noteId] else { return }
         // Only if the line is still the task shown.
@@ -62,13 +95,16 @@ struct AgendaView: View {
 
 private struct AgendaRow: View {
     let item: Tasks.AgendaItem
+    /// Branches of single days say the day already; the others say it per task.
+    let showsDay: Bool
     let toggle: () -> Void
     let open: () -> Void
 
-    private var dateText: String {
-        guard let due = item.task.due, let day = due.day() else { return "" }
-        let date = day.formatted(.dateTime.month().day().weekday(.abbreviated).locale(L.locale))
-        return due.hour != nil ? "\(date) \(due.timeText)" : date
+    private var whenText: String {
+        guard let due = item.task.due else { return "" }
+        guard showsDay else { return due.timeText }
+        let day = L.locale.language.languageCode?.identifier == "zh" ? "\(due.month)月\(due.day)日" : "\(due.month)/\(due.day)"
+        return due.hour != nil ? "\(day) \(due.timeText)" : day
     }
 
     var body: some View {
@@ -79,17 +115,18 @@ private struct AgendaRow: View {
             .buttonStyle(.plain)
             Button(action: open) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(item.task.text.isEmpty ? L.untitled : item.task.text).foregroundStyle(.primary).lineLimit(2)
-                    Text("\(dateText) · \(item.noteTitle.isEmpty ? L.untitled : item.noteTitle)")
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(item.task.text.isEmpty ? L.untitled : item.task.text).foregroundStyle(.primary).lineLimit(1)
+                    Text(item.noteTitle.isEmpty ? L.untitled : item.noteTitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            Text(L.daysLeft(item.days))
+            if item.task.repeat != nil { Text("🔁").font(.caption2) }
+            Text(whenText)
                 .font(.caption)
-                .foregroundStyle(item.days < 0 ? Color.red : item.days == 0 ? Color.accentColor : Color.secondary)
+                .monospacedDigit()
+                .foregroundStyle(item.days < 0 ? Color.red : Color.secondary)
         }
     }
 }

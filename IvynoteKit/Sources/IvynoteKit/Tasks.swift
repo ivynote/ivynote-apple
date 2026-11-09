@@ -24,6 +24,16 @@ public enum Tasks {
         /// Hour and minute; nil for the whole day.
         public var hour: Int?, minute: Int?
 
+        public init(year: Int, month: Int, day: Int, hour: Int? = nil, minute: Int? = nil) {
+            self.year = year; self.month = month; self.day = day; self.hour = hour; self.minute = minute
+        }
+
+        /// A local date as a whole day.
+        public init(date: Date, calendar: Calendar = .current) {
+            let c = calendar.dateComponents([.year, .month, .day], from: date)
+            self.init(year: c.year ?? 1970, month: c.month ?? 1, day: c.day ?? 1)
+        }
+
         public var dateText: String { String(format: "%04d-%02d-%02d", year, month, day) }
         public var timeText: String { hour.map { String(format: "%02d:%02d", $0, minute ?? 0) } ?? "" }
 
@@ -162,6 +172,56 @@ public enum Tasks {
             if a.noteTitle != b.noteTitle { return a.noteTitle < b.noteTitle }
             return a.task.line < b.task.line
         }
+    }
+
+    /// A branch of the agenda tree: overdue, a day of the coming week, or a month.
+    public struct AgendaNode: Sendable, Identifiable {
+        public enum Kind: Sendable { case overdue, today, tomorrow, day, month }
+        /// Stable expansion key: `overdue`, `d:YYYY-MM-DD`, `m:YYYY-MM`.
+        public var key: String
+        public var kind: Kind
+        /// The day (today, tomorrow, day) or the first of the month (month).
+        public var date: Due?
+        public var items: [AgendaItem]
+        public var id: String { key }
+        /// Overdue, today and tomorrow start open; the rest start folded.
+        public var openByDefault: Bool { kind == .overdue || kind == .today || kind == .tomorrow }
+    }
+
+    /// Days within this many days get a branch each; later ones group by month (as the web).
+    public static let agendaDays = 7
+
+    /// The agenda as a tree (guide 11.8), in the web client's order.
+    public static func agendaTree(_ items: [AgendaItem]) -> [AgendaNode] {
+        var out: [AgendaNode] = []
+        var index: [String: Int] = [:]
+        for it in items {
+            guard let due = it.task.due else { continue }
+            let key: String
+            let kind: AgendaNode.Kind
+            var date = Due(year: due.year, month: due.month, day: due.day, hour: nil, minute: nil)
+            if it.days < 0 { key = "overdue"; kind = .overdue }
+            else if it.days == 0 { key = "d:" + date.dateText; kind = .today }
+            else if it.days == 1 { key = "d:" + date.dateText; kind = .tomorrow }
+            else if it.days < agendaDays { key = "d:" + date.dateText; kind = .day }
+            else {
+                date.day = 1
+                key = "m:" + String(format: "%04d-%02d", due.year, due.month)
+                kind = .month
+            }
+            if let i = index[key] {
+                out[i].items.append(it)
+            } else {
+                index[key] = out.count
+                out.append(AgendaNode(key: key, kind: kind, date: kind == .overdue ? nil : date, items: [it]))
+            }
+        }
+        func rank(_ n: AgendaNode) -> String {
+            if n.kind == .overdue { return "0" }
+            // A month sorts after the days it shares with the coming week.
+            return "1" + String(n.key.dropFirst(2)) + (n.kind == .month ? "-99" : "")
+        }
+        return out.sorted { rank($0) < rank($1) }
     }
 
     static func nextDate(_ due: Due, _ rule: Repeat, calendar: Calendar = Calendar(identifier: .gregorian)) -> Due {

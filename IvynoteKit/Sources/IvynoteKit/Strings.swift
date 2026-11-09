@@ -356,6 +356,23 @@ public protocol Strings: Sendable {
     var serverInvalid: String { get }
     func unsupportedScheme(_ scheme: String) -> String
     func insecureRemote(_ host: String) -> String
+
+    // Dates, reminders and protected notes (guide 8.4, 9.4, 11.8)
+    var agenda: String { get }
+    var agendaEmpty: String { get }
+    var agendaEmptyHint: String { get }
+    var agendaProtectedHint: String { get }
+    var agendaOverdue: String { get }
+    var agendaToday: String { get }
+    var agendaLater: String { get }
+    var dateAndReminder: String { get }
+    var protectNote: String { get }
+    var changeNotePassword: String { get }
+    var removeNotePassword: String { get }
+    var lockNoteNow: String { get }
+    var protectedNote: String { get }
+    func reminderFrom(_ title: String) -> String
+    func daysLeft(_ days: Int) -> String
 }
 
 public struct ZhStrings: Strings {
@@ -720,6 +737,24 @@ public struct ZhStrings: Strings {
     public let serverInvalid = "服务器地址无效"
     public func unsupportedScheme(_ scheme: String) -> String { "不支持的协议：\(scheme)" }
     public func insecureRemote(_ host: String) -> String { "\(host) 不是局域网地址，必须使用 https://" }
+
+    public let agenda = "日程"
+    public let agendaEmpty = "还没有带日期的待办"
+    public let agendaEmptyHint = "在待办后输入 @明天 9点、@周五，或点格式栏的日期按钮。选好日期就会出现在这里，到点提醒。"
+    public let agendaProtectedHint = "加密笔记中的待办不会出现在日程里。"
+    public let agendaOverdue = "已逾期"
+    public let agendaToday = "今天"
+    public let agendaLater = "接下来"
+    public let dateAndReminder = "日期与提醒"
+    public let protectNote = "设置密码…"
+    public let changeNotePassword = "更改密码…"
+    public let removeNotePassword = "移除密码"
+    public let lockNoteNow = "立即锁定"
+    public let protectedNote = "已加密"
+    public func reminderFrom(_ title: String) -> String { "来自《\(title)》" }
+    public func daysLeft(_ days: Int) -> String {
+        days == 0 ? "今天" : days > 0 ? "\(days) 天后" : "逾期 \(-days) 天"
+    }
 }
 
 public struct EnStrings: Strings {
@@ -1087,4 +1122,24 @@ public struct EnStrings: Strings {
     public let serverInvalid = "The server address is not valid"
     public func unsupportedScheme(_ scheme: String) -> String { "Unsupported protocol: \(scheme)" }
     public func insecureRemote(_ host: String) -> String { "\(host) is not on the local network; use https://" }
+
+    public let agenda = "Agenda"
+    public let agendaEmpty = "No dated to-dos yet"
+    public let agendaEmptyHint = "Type @tomorrow 9am or @fri after a to-do, or tap the date button in the format bar. Dated to-dos appear here and remind you when they are due."
+    public let agendaProtectedHint = "To-dos in password-protected notes are not shown here."
+    public let agendaOverdue = "Overdue"
+    public let agendaToday = "Today"
+    public let agendaLater = "Coming up"
+    public let dateAndReminder = "Date & reminder"
+    public let protectNote = "Protect with password…"
+    public let changeNotePassword = "Change password…"
+    public let removeNotePassword = "Remove password"
+    public let lockNoteNow = "Lock now"
+    public let protectedNote = "Protected"
+    public func reminderFrom(_ title: String) -> String { "From “\(title)”" }
+    public func daysLeft(_ days: Int) -> String {
+        if days == 0 { return "today" }
+        if days > 0 { return days == 1 ? "in 1 day" : "in \(days) days" }
+        return days == -1 ? "1 day overdue" : "\(-days) days overdue"
+    }
 }

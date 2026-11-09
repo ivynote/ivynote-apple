@@ -67,9 +67,24 @@ struct NoteEditorView: View {
             .toolbar {
                 if !note.isTrashed {
                     InsertMenu(pickers: $pickers)
-                    Button(L.share, systemImage: "square.and.arrow.up") { sharing = true }
-                        .help(L.shareAndExport)
+                    // A protected note is never shared: the server cannot read it.
+                    if !host.isProtected {
+                        Button(L.share, systemImage: "square.and.arrow.up") { sharing = true }
+                            .help(L.shareAndExport)
+                    }
                     Menu(L.more, systemImage: "ellipsis.circle") {
+                        if !host.isLocked {
+                            Button(L.dateAndReminder, systemImage: "calendar.badge.clock") { host.command("due") }
+                            Divider()
+                            if host.isProtected {
+                                Button(L.lockNoteNow, systemImage: "lock") { host.command("lock") }
+                                Button(L.changeNotePassword, systemImage: "key") { host.command("changePassword") }
+                                Button(L.removeNotePassword, systemImage: "lock.open") { host.command("unprotect") }
+                            } else {
+                                Button(L.protectNote, systemImage: "lock") { host.command("protect") }
+                            }
+                            Divider()
+                        }
                         Button(note.pinned ? L.unpin : L.pin, systemImage: note.pinned ? "pin.slash" : "pin") {
                             engine.updateNote(noteID, .init(pinned: !note.pinned))
                         }
@@ -341,6 +356,7 @@ struct FormatBar: View {
         ("bold", "bold", L.formatBold),
         ("italic", "italic", L.formatItalic),
         ("task", "checklist", L.formatTask),
+        ("due", "calendar.badge.clock", L.dateAndReminder),
         ("list", "list.bullet", L.formatList),
         ("ordered", "list.number", L.formatOrdered),
         ("quote", "text.quote", L.formatQuote),

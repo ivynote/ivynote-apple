@@ -15,12 +15,14 @@ struct LibraryView: View {
     @State private var expanded: Set<String> = []
     @State private var showAccount = false
     @State private var showMedia = false
+    @State private var showAgenda = false
+    @State private var reminderTask: Task<Void, Never>?
 
     private var selectedNote: String? { selection.flatMap(noteID(fromKey:)) }
 
     var body: some View {
         NavigationSplitView {
-            ShelfView(selection: $selection, expanded: $expanded, showAccount: $showAccount, showMedia: $showMedia, reveal: reveal)
+            ShelfView(selection: $selection, expanded: $expanded, showAccount: $showAccount, showMedia: $showMedia, showAgenda: $showAgenda, reveal: reveal)
                 .navigationTitle(library.ref.name)
                 #if os(iOS)
                 // The header row names the library, so the bar stays quiet:
@@ -42,6 +44,25 @@ struct LibraryView: View {
         }
         .sheet(isPresented: $showAccount) { AccountView() }
         .sheet(isPresented: $showMedia) { MediaLibraryView(openNote: reveal) }
+        .sheet(isPresented: $showAgenda) {
+            AgendaView { id, line in
+                showAgenda = false
+                editor.pendingLine = (id, line)
+                reveal(id)
+            }
+        }
+        // Reminders follow the notes: the system's notifications are set
+        // again a moment after any change (guide 11.8).
+        .onChange(of: engine.notes, initial: true) { _, notes in
+            reminderTask?.cancel()
+            let list = Array(notes.values)
+            let id = library.ref.id
+            reminderTask = Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                guard !Task.isCancelled else { return }
+                await Reminders.schedule(list, library: id)
+            }
+        }
         .alert(L.uploadFailedTitle, isPresented: Binding(get: { engine.uploadFailure != nil }, set: { if !$0 { engine.uploadFailure = nil } }),
                presenting: engine.uploadFailure) { _ in
             Button(L.ok, role: .cancel) { engine.uploadFailure = nil }
@@ -128,6 +149,7 @@ struct ShelfView: View {
     @Binding var expanded: Set<String>
     @Binding var showAccount: Bool
     @Binding var showMedia: Bool
+    @Binding var showAgenda: Bool
     let reveal: (String) -> Void
 
     @AppStorage("ivy.shelf.sort") private var sortBy: Shelf.SortBy = .updated
@@ -145,7 +167,7 @@ struct ShelfView: View {
             // The library heads the shelf: what it is, how its sync stands,
             // and (as a menu) the way to another one.
             Section {
-                LibraryHeader(showAccount: $showAccount, showMedia: $showMedia)
+                LibraryHeader(showAccount: $showAccount, showMedia: $showMedia, showAgenda: $showAgenda)
                     .selectionDisabled()
                     .listRowInsets(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
                     .listRowSeparator(.hidden)
@@ -220,7 +242,8 @@ struct ShelfView: View {
     @ViewBuilder private var searchResults: some View {
         let q = query.trimmingCharacters(in: .whitespaces)
         let hits = Shelf.sortNotes(engine.liveNotes.filter {
-            $0.title.localizedCaseInsensitiveContains(q) || $0.body.localizedCaseInsensitiveContains(q)
+            // A protected note is found by its title only (guide 8.4).
+            $0.title.localizedCaseInsensitiveContains(q) || (!NoteLock.isEncrypted($0.body) && $0.body.localizedCaseInsensitiveContains(q))
         }, by: sortBy)
         if hits.isEmpty {
             ContentUnavailableView.search(text: q)
@@ -603,6 +626,7 @@ struct LibraryHeader: View {
     @Environment(Library.self) private var library
     @Binding var showAccount: Bool
     @Binding var showMedia: Bool
+    @Binding var showAgenda: Bool
 
     var body: some View {
         Menu {
@@ -620,6 +644,7 @@ struct LibraryHeader: View {
                 }
             }
             Section {
+                Button(L.agenda, systemImage: "calendar") { showAgenda = true }
                 if !library.ref.isLocal {
                     Button(L.mediaLibraryEllipsis, systemImage: "photo.on.rectangle.angled") { showMedia = true }
                     Button(L.accountAndSync, systemImage: "person.crop.circle") { showAccount = true }

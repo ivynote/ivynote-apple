@@ -13,6 +13,11 @@ final class EditorHost: NSObject {
     private(set) var focused = false
     /// The 0-based body line at the top of the view, for the outline.
     private(set) var topLine = 0
+    /// The open note has a password (guide 8.4), and is locked now.
+    private(set) var isProtected = false
+    private(set) var isLocked = false
+    /// A line to show once this note opens (a task picked on the agenda).
+    @ObservationIgnored var pendingLine: (id: String, line: Int)?
 
     @ObservationIgnored private weak var engine: SyncEngine?
     @ObservationIgnored private var ready = false
@@ -21,6 +26,8 @@ final class EditorHost: NSObject {
     /// The body the page has, to skip echoing its own edits back to it.
     @ObservationIgnored private var pageBody = ""
     @ObservationIgnored var onOpenNote: ((_ id: String, _ title: String) -> Void)?
+    /// The insert menu asks for a photo ("image") or a file ("file").
+    @ObservationIgnored var onPick: ((_ kind: String) -> Void)?
     /// Files pasted or dropped into the editor.
     @ObservationIgnored var onFiles: ((_ files: [DroppedFile]) -> Void)?
     /// Shows documents without editing them (history versions): no changes,
@@ -76,7 +83,13 @@ final class EditorHost: NSObject {
             .map { ["id": $0.id, "title": $0.title, "folder": engine.folders[$0.folderId]?.name ?? ""] }
         call("ivy.setTitles(list)", ["list": titles])
         sendKinds()
+        isProtected = NoteLock.isEncrypted(note.body)
+        isLocked = isProtected
         call("ivy.load(p)", ["p": ["id": note.id, "body": note.body, "readonly": readonly || note.isTrashed, "fontSize": Self.fontSize, "focus": focus] as [String: Any]])
+        if let p = pendingLine, p.id == note.id {
+            pendingLine = nil
+            scrollToLine(p.line)
+        }
     }
 
     /// Shows a body read-only, e.g. a version from the history.
@@ -176,8 +189,15 @@ final class EditorHost: NSObject {
                 return DroppedFile(name: name, mime: mime, data: data)
             }
             if !files.isEmpty { onFiles?(files) }
+        case "pick":
+            guard !readonly else { return }
+            onPick?(m["kind"] as? String ?? "")
         case "focus":
             focused = m["focused"] as? Bool ?? false
+        case "protection":
+            guard let id = m["id"] as? String, id == noteID else { return }
+            isProtected = m["protected"] as? Bool ?? false
+            isLocked = m["locked"] as? Bool ?? false
         case "scroll":
             topLine = m["line"] as? Int ?? 0
         case "error", "log":

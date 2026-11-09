@@ -30,6 +30,21 @@ IvynoteKit/        Swift package with no UI: API client, session, Keychain,
 IvynoteKit holds everything that can be tested without a simulator. UI code
 stays thin.
 
+## Dates, reminders and protected notes
+
+- **Dates** (guide 9.4): `@明天 9点` completion, date chips and the picker come
+  with the editor page; the iPhone format bar and the note menu have 日期与提醒.
+- **Agenda** (library menu → 日程, `AgendaView`): open dated to-dos across the
+  library, check them off, open a note at its task.
+- **Reminders** (`Reminders.swift`, `Tasks` in IvynoteKit): local
+  notifications for the next 48 reminders, set again a moment after any
+  change; permission is asked the first time there is something to remind of.
+- **Password-protected notes** (guide 8.4): the editor page shows the lock
+  panel, asks for the password and seals every edit; the app only ever stores
+  and syncs the sealed body. Note menu: 设置密码 / 更改密码 / 移除密码 / 立即锁定.
+  Protected notes are found by title only, cannot be shared, and take no part
+  in the agenda or reminders.
+
 ## Getting started
 
 ```bash

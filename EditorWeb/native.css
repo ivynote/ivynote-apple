@@ -35,7 +35,8 @@ body {
 /* On a phone a table is wider than the page: it scrolls sideways, and no
    column shrinks to one character per line. */
 .ivy-editor .cm-table th,
-.ivy-editor .cm-table td {
+.ivy-editor .cm-table td,
+.ivy-editor .cm-table-edit .cm-cell {
 	min-width: 5em;
 }
 /* Backlinks right below the body (guide 11.3), then the room to scroll the

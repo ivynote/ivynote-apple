@@ -33,9 +33,10 @@ NODE_PATH="$ivy/node_modules" "$bin/esbuild" "$here/main.ts" \
 	--outdir="$out"
 
 # Styles: the web's design tokens and prose styles, the editor's own styles
-# lifted from Editor.svelte (":global(x)" -> "x"), and the native page frame.
+# lifted from Editor.svelte (":global(x)" -> "x", "@keyframes -global-x" ->
+# "@keyframes x"), and the native page frame.
 sed -n '/<style>/,/<\/style>/p' "$client/packages/editor/src/Editor.svelte" \
-	| sed '1d;$d' | sed 's/:global(\([^)]*\))/\1/g' > "$tmp/editor-svelte.css"
+	| sed '1d;$d' | sed 's/:global(\([^)]*\))/\1/g; s/@keyframes -global-/@keyframes /' > "$tmp/editor-svelte.css"
 cat > "$tmp/input.css" <<CSS
 @import "$client/packages/ui/src/app.css";
 @import "$tmp/editor-svelte.css";

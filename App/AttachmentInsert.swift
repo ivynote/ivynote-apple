@@ -78,6 +78,7 @@ struct AttachmentPickerState {
     var files = false
     var camera = false
 
+    @MainActor
     static var cameraAvailable: Bool {
         #if os(iOS)
         UIImagePickerController.isSourceTypeAvailable(.camera)

@@ -150,12 +150,11 @@ struct OpenLibraryView: View {
             guard !ref.isLocal else { return }
             // Ask for time to push what was just written (guide 6.8).
             #if os(iOS)
-            let app = UIApplication.shared
-            var id = UIBackgroundTaskIdentifier.invalid
-            id = app.beginBackgroundTask(withName: "ivy.sync") { app.endBackgroundTask(id) }
+            let backgroundTask = LibraryBackgroundTask()
+            backgroundTask.begin()
             Task {
                 await library.flush()
-                app.endBackgroundTask(id)
+                backgroundTask.end()
             }
             #else
             Task { await library.flush() }
@@ -165,3 +164,23 @@ struct OpenLibraryView: View {
         }
     }
 }
+
+#if os(iOS)
+/// Ends background sync time once, whether flushing finishes or time expires.
+@MainActor
+private final class LibraryBackgroundTask {
+    private var id = UIBackgroundTaskIdentifier.invalid
+
+    func begin() {
+        id = UIApplication.shared.beginBackgroundTask(withName: "ivy.sync") { [weak self] in
+            self?.end()
+        }
+    }
+
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
+    }
+}
+#endif

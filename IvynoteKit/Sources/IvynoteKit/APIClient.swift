@@ -3,13 +3,24 @@ import Foundation
 /// Sends one HTTP request. Swapped for a stub in tests.
 public protocol HTTPTransport: Sendable {
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse)
+    /// Sends a potentially large attachment upload using a session configured
+    /// to wait for connectivity with generous timeouts.
+    func sendUpload(_ request: URLRequest) async throws -> (Data, HTTPURLResponse)
+}
+
+extension HTTPTransport {
+    public func sendUpload(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        try await send(request)
+    }
 }
 
 public struct URLSessionTransport: HTTPTransport {
     let session: URLSession
+    let uploadSession: URLSession
 
-    public init(session: URLSession) {
+    public init(session: URLSession, uploadSession: URLSession? = nil) {
         self.session = session
+        self.uploadSession = uploadSession ?? session
     }
 
     public init() {
@@ -23,10 +34,26 @@ public struct URLSessionTransport: HTTPTransport {
         config.timeoutIntervalForRequest = 30
         config.waitsForConnectivity = false
         session = URLSession(configuration: config)
+
+        let upConfig = URLSessionConfiguration.ephemeral
+        upConfig.httpCookieStorage = nil
+        upConfig.httpShouldSetCookies = false
+        upConfig.httpCookieAcceptPolicy = .never
+        upConfig.urlCache = nil
+        upConfig.timeoutIntervalForRequest = 120
+        upConfig.timeoutIntervalForResource = 600
+        upConfig.waitsForConnectivity = true
+        uploadSession = URLSession(configuration: upConfig)
     }
 
     public func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        return (data, http)
+    }
+
+    public func sendUpload(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let (data, response) = try await uploadSession.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         return (data, http)
     }
@@ -140,10 +167,18 @@ public struct APIClient: Sendable {
     /// Sends a request and returns the body of a 2xx answer; maps every
     /// failure to an `APIError`.
     func perform(_ req: URLRequest) async throws -> Data {
+        try await performRequest(req, via: transport.send)
+    }
+
+    func performUpload(_ req: URLRequest) async throws -> Data {
+        try await performRequest(req, via: transport.sendUpload)
+    }
+
+    private func performRequest(_ req: URLRequest, via sender: (URLRequest) async throws -> (Data, HTTPURLResponse)) async throws -> Data {
         let data: Data
         let response: HTTPURLResponse
         do {
-            (data, response) = try await transport.send(req)
+            (data, response) = try await sender(req)
         } catch let error as APIError {
             throw error
         } catch {

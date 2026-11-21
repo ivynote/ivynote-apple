@@ -131,9 +131,13 @@ struct NoteEditorView: View {
     }
 
     private var activeUploads: Int {
-        let queued = engine.isLocal || engine.state.status == .offline
-            ? 0
-            : engine.uploads.values.filter { $0.failed == nil }.count
+        let queued: Int = if engine.isLocal {
+            0
+        } else if case .waitingForNetwork = engine.uploadStatus {
+            0
+        } else {
+            engine.uploads.values.filter { $0.failed == nil }.count
+        }
         return inserter.busy + queued
     }
 

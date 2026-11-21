@@ -19,7 +19,7 @@ public final class Library {
     @ObservationIgnored private let storeURL: URL?
     @ObservationIgnored private var events: Task<Void, Never>?
     @ObservationIgnored private var monitor: NWPathMonitor?
-    @ObservationIgnored private var online = true
+    @ObservationIgnored private var online: Bool?
     @ObservationIgnored private var active = false
 
     public init(ref: LibraryRef, account: StoredAccount?, storeURL: URL?, transport: HTTPTransport = URLSessionTransport()) throws {
@@ -36,9 +36,25 @@ public final class Library {
         guard !active else { return }
         active = true
         guard api != nil else { return }
+        if engine.hasRetryableUploads {
+            engine.resumeUploads()
+        }
         Task { await engine.sync() }
         connectEvents()
         startMonitor()
+    }
+
+    /// Updates connectivity from the local or app-global path monitor so
+    /// background uploads and offline sync recover as soon as a path is up.
+    public func setNetworkReachable(_ up: Bool) {
+        let wasOffline = (online == false) || (engine.state.status == .offline)
+        online = up
+        engine.setNetworkReachable(up)
+        guard up else { return }
+        if active && (wasOffline || engine.state.pending > 0) {
+            Task { await engine.sync() }
+            connectEvents()
+        }
     }
 
     /// The app went to the background: save now, stop listening. The caller
@@ -108,10 +124,7 @@ public final class Library {
     }
 
     private func networkChanged(_ up: Bool) {
-        defer { online = up }
-        guard up, !online, active else { return }
-        Task { await engine.sync() }
-        connectEvents()
+        setNetworkReachable(up)
     }
 
     // MARK: Device

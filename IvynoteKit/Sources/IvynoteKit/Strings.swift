@@ -62,6 +62,9 @@ public protocol Strings: Sendable {
     var neverSynced: String { get }
     func blocked(_ n: Int) -> String
     func uploadsPending(_ n: Int) -> String
+    func uploadingFilesBackground(_ n: Int) -> String
+    func uploadsWaitingNetwork(_ n: Int) -> String
+    func uploadsFailedCount(_ n: Int) -> String
 
     // Libraries
     var libraries: String { get }
@@ -261,7 +264,10 @@ public protocol Strings: Sendable {
     func waitingUploads(_ n: Int) -> String
     func notUploaded(_ error: String) -> String
     var savedOnDevice: String { get }
+    var uploadingNow: String { get }
+    var queuedForUpload: String { get }
     var uploadsWhenOnline: String { get }
+    var uploadNow: String { get }
     var retryUpload: String { get }
     var upload: String { get }
     var uploadFiles: String { get }
@@ -451,6 +457,9 @@ public struct ZhStrings: Strings {
     public let neverSynced = "尚未同步"
     public func blocked(_ n: Int) -> String { "\(n) 条更改被服务器拒绝" }
     public func uploadsPending(_ n: Int) -> String { "\(n) 个文件待上传" }
+    public func uploadingFilesBackground(_ n: Int) -> String { "正在后台上传 \(n) 个文件…" }
+    public func uploadsWaitingNetwork(_ n: Int) -> String { "等待网络 · \(n) 个文件待上传" }
+    public func uploadsFailedCount(_ n: Int) -> String { "\(n) 个文件上传失败" }
 
     // Libraries
     public let libraries = "笔记库"
@@ -660,7 +669,10 @@ public struct ZhStrings: Strings {
     public func waitingUploads(_ n: Int) -> String { "等待上传 \(n)" }
     public func notUploaded(_ error: String) -> String { "未能上传：\(error)" }
     public let savedOnDevice = "保存在本机"
-    public let uploadsWhenOnline = "联网后自动上传"
+    public let uploadingNow = "正在上传…"
+    public let queuedForUpload = "排队等待上传…"
+    public let uploadsWhenOnline = "等待网络后继续上传"
+    public let uploadNow = "立即上传"
     public let retryUpload = "重新上传"
     public let upload = "上传"
     public let uploadFiles = "上传文件"
@@ -863,6 +875,9 @@ public struct EnStrings: Strings {
     public let neverSynced = "Not synced yet"
     public func blocked(_ n: Int) -> String { "\(count(n, "change")) refused by the server" }
     public func uploadsPending(_ n: Int) -> String { "\(count(n, "file")) to upload" }
+    public func uploadingFilesBackground(_ n: Int) -> String { "Uploading \(count(n, "file")) in background…" }
+    public func uploadsWaitingNetwork(_ n: Int) -> String { "Waiting for network · \(count(n, "file"))" }
+    public func uploadsFailedCount(_ n: Int) -> String { "\(count(n, "file")) failed to upload" }
 
     // Libraries
     public let libraries = "Libraries"
@@ -1072,7 +1087,10 @@ public struct EnStrings: Strings {
     public func waitingUploads(_ n: Int) -> String { "Waiting to upload: \(n)" }
     public func notUploaded(_ error: String) -> String { "Not uploaded: \(error)" }
     public let savedOnDevice = "Saved on this device"
-    public let uploadsWhenOnline = "Uploads once online"
+    public let uploadingNow = "Uploading…"
+    public let queuedForUpload = "Queued to upload…"
+    public let uploadsWhenOnline = "Waiting for network to upload"
+    public let uploadNow = "Upload now"
     public let retryUpload = "Upload again"
     public let upload = "Upload"
     public let uploadFiles = "Upload files"

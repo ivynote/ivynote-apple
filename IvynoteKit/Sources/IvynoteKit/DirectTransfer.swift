@@ -485,7 +485,7 @@ extension APIClient {
         req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         req.httpBody = data
         req.timeoutInterval = 600
-        let (_, response) = try await transport.send(req)
+        let (_, response) = try await transport.sendUpload(req)
         guard (200..<300).contains(response.statusCode) else {
             throw APIError.server(status: response.statusCode, message: "direct upload failed")
         }

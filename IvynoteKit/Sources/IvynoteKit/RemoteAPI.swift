@@ -227,9 +227,9 @@ extension APIClient {
         let boundary = "ivy-\(newEntityID())\(newEntityID())"
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.httpBody = Self.multipart(data, name: name, mime: mime, boundary: boundary)
-        // Large files take a while; the session's idle timeout still applies.
+        // Large files take a while; use the dedicated upload session.
         req.timeoutInterval = 600
-        let body = try await perform(req)
+        let body = try await performUpload(req)
         do {
             return try JSONDecoder().decode(UploadResult.self, from: body)
         } catch {

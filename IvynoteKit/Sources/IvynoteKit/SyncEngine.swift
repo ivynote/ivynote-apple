@@ -2,6 +2,14 @@ import CryptoKit
 import Foundation
 import Observation
 
+/// Live state of the independent background attachment upload pipeline.
+public enum UploadStatus: Equatable, Sendable {
+    case idle
+    case uploading(currentID: String, remaining: Int)
+    case waitingForNetwork(remaining: Int)
+    case failed(count: Int)
+}
+
 /// Where the engine stands, for the status line (guide 3.5).
 public struct SyncState: Equatable, Sendable {
     public enum Status: Equatable, Sendable { case idle, syncing, offline, error }
@@ -65,6 +73,8 @@ public final class SyncEngine {
     /// Files added offline (or in a local library), by their `local-` id.
     public private(set) var uploads: [String: PendingUpload] = [:]
     public private(set) var state = SyncState()
+    /// Live status of the background attachment uploader (decoupled from note edit debounce).
+    public private(set) var uploadStatus: UploadStatus = .idle
     /// Set when the server answers with a conflict copy; cleared by the UI.
     public var conflict: ConflictNotice?
     /// Set when the server refuses a queued file; cleared by the UI.
@@ -90,9 +100,16 @@ public final class SyncEngine {
     @ObservationIgnored private let now: () -> Millis
     @ObservationIgnored private let debounce: Duration
     @ObservationIgnored private let persistDelay: Duration
+    @ObservationIgnored private let uploadDelay: Duration
     @ObservationIgnored private var syncTimer: Task<Void, Never>?
     @ObservationIgnored private var persistTimer: Task<Void, Never>?
     @ObservationIgnored private var running: Task<Void, Never>?
+    @ObservationIgnored private var uploadTask: Task<Void, Never>?
+    @ObservationIgnored private var uploadRetryTimer: Task<Void, Never>?
+    @ObservationIgnored private var uploadMore = false
+    @ObservationIgnored private var uploadRetryDelay: Duration = .seconds(2)
+    @ObservationIgnored private var networkOnline = true
+    @ObservationIgnored private var lastUploadError: Error?
     @ObservationIgnored private var again = false
     @ObservationIgnored private var stopped = false
     @ObservationIgnored private var retryDelay: Duration = .seconds(2)
@@ -110,6 +127,7 @@ public final class SyncEngine {
 
     public init(store: LocalStore, transport: SyncTransport?, device: String,
                 debounce: Duration = .milliseconds(800), persistDelay: Duration = .milliseconds(300),
+                uploadDelay: Duration? = nil,
                 cacheSettings: AttachmentCacheSettings? = .shared,
                 now: @escaping () -> Millis = { Millis(Date().timeIntervalSince1970 * 1000) }) {
         self.store = store
@@ -119,6 +137,7 @@ public final class SyncEngine {
         self.now = now
         self.debounce = debounce
         self.persistDelay = persistDelay
+        self.uploadDelay = uploadDelay ?? (debounce >= .seconds(60) ? debounce : .milliseconds(150))
         filesDir = store.filesURL ?? FileManager.default.temporaryDirectory
             .appending(path: "ivy-uploads-\(UUID().uuidString)", directoryHint: .isDirectory)
         attachmentCache = AttachmentStore(store: store, settings: cacheSettings, now: now)
@@ -144,6 +163,7 @@ public final class SyncEngine {
         state.lastSyncAt = store.meta("lastSyncAt") ?? 0
         for n in notes.values { observeClock(n.hlc) }
         updateCounts()
+        refreshUploadStatus()
     }
 
     // MARK: Sync loop (guide 6.8)
@@ -221,6 +241,11 @@ public final class SyncEngine {
     public func stop() {
         stopped = true
         syncTimer?.cancel()
+        syncTimer = nil
+        uploadRetryTimer?.cancel()
+        uploadRetryTimer = nil
+        uploadTask?.cancel()
+        uploadTask = nil
         persistNow()
         attachmentCache.stop()
     }
@@ -511,6 +536,7 @@ public final class SyncEngine {
 
     @discardableResult
     public func createNote(title: String = "", body: String = "", folderId: String = "", tags: [String] = [], pinned: Bool = false) -> Note {
+        let body = normalizeKnownLocalLinks(body)
         let t = now()
         var id = newEntityID()
         while notes[id] != nil { id = newEntityID() }
@@ -529,7 +555,10 @@ public final class SyncEngine {
         guard var n = notes[id] else { return }
         var fields: [String: JSONValue] = [:]
         if let v = patch.title, v != n.title { n.title = v; fields["title"] = .string(v) }
-        if let v = patch.body, v != n.body { n.body = v; fields["body"] = .string(v) }
+        if let rawBody = patch.body {
+            let v = normalizeKnownLocalLinks(rawBody)
+            if v != n.body { n.body = v; fields["body"] = .string(v) }
+        }
         if let v = patch.folderId, v != n.folderId { n.folderId = v; fields["folderId"] = .string(v) }
         if let v = patch.tags, v != n.tags { n.tags = v; fields["tags"] = .array(v.map { .string($0) }) }
         if let v = patch.pinned, v != n.pinned { n.pinned = v; fields["pinned"] = .bool(v) }
@@ -539,6 +568,21 @@ public final class SyncEngine {
         notes[id] = n
         dirty.notes.insert(id)
         enqueue(.note, id, fields, baseRev: n.rev)
+    }
+
+    /// Rewrites any `ivy://res/local-*` links whose upload has already promoted
+    /// to a canonical server ID so concurrent typing never reverts a normalized link.
+    private func normalizeKnownLocalLinks(_ body: String) -> String {
+        let marker = "ivy://res/\(PendingUpload.prefix)"
+        guard body.contains(marker) else { return body }
+        var out = body
+        for ref in Links.resourceRefs(body) where ref.hasPrefix(PendingUpload.prefix) {
+            let canonical = attachmentCache.canonicalID(ref)
+            if canonical != ref {
+                out = out.replacingOccurrences(of: "ivy://res/\(ref)", with: "ivy://res/\(canonical)")
+            }
+        }
+        return out
     }
 
     /// Permanently deletes a note.
@@ -691,8 +735,9 @@ public final class SyncEngine {
             up = try queueUpload(data, name: name, mime: mime, sha256: hash)
         }
         if transport != nil && !stopped {
-            scheduleSync(after: min(debounce, .milliseconds(250)))
+            scheduleUpload()
         }
+        refreshUploadStatus()
         return AddedFile(id: up.id, name: name, kind: up.kind, local: true)
     }
 
@@ -713,24 +758,130 @@ public final class SyncEngine {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Schedules the independent background upload worker without interfering
+    /// with note edit debounce timers.
+    public func scheduleUpload(after delay: Duration? = nil) {
+        guard !stopped, transport != nil, hasPendingUploads else { return }
+        if uploadTask != nil {
+            uploadMore = true
+            return
+        }
+        uploadRetryTimer?.cancel()
+        let wait = delay ?? uploadDelay
+        uploadRetryTimer = Task { [weak self] in
+            if wait > .zero {
+                try? await Task.sleep(for: wait)
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.uploadRetryTimer = nil
+            await self.drainUploads()
+        }
+    }
+
+    /// Resets upload backoff and starts draining pending uploads immediately.
+    public func resumeUploads() {
+        guard !stopped, transport != nil, hasPendingUploads else {
+            refreshUploadStatus()
+            return
+        }
+        uploadRetryDelay = .seconds(2)
+        uploadRetryTimer?.cancel()
+        uploadRetryTimer = nil
+        if uploadTask != nil {
+            uploadMore = true
+            return
+        }
+        Task { [weak self] in
+            await self?.drainUploads()
+        }
+    }
+
+    /// Updates network reachability from the OS path monitor. When connectivity
+    /// returns, pending uploads resume immediately without waiting for backoff.
+    public func setNetworkReachable(_ reachable: Bool) {
+        networkOnline = reachable
+        if reachable {
+            uploadRetryDelay = .seconds(2)
+            if hasRetryableUploads {
+                resumeUploads()
+            } else {
+                refreshUploadStatus()
+            }
+        } else {
+            refreshUploadStatus()
+        }
+    }
+
+    /// Drains all non-failed pending uploads independently of note sync.
+    /// Concurrent callers coalesce onto the active upload task so the same file
+    /// is never uploaded twice. Returns true if no retryable uploads remain.
+    @discardableResult
+    public func drainUploads() async -> Bool {
+        guard !stopped, transport != nil else { return true }
+        if let uploadTask {
+            uploadMore = true
+            await uploadTask.value
+            return !hasPendingUploads
+        }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            repeat {
+                self.uploadMore = false
+                await self.runUploadPass()
+            } while self.uploadMore && !self.stopped && self.hasPendingUploads && self.lastUploadError == nil
+        }
+        uploadTask = task
+        await task.value
+        uploadTask = nil
+        return !hasPendingUploads
+    }
+
     /// Uploads queued files in the background, oldest first, promotes each local
     /// copy directly into the local attachment cache under the server's id (so
     /// it never needs to be downloaded back), and normalizes note references.
     /// Network errors, 5xx, 401, 408 and 429 end the round; any other refusal
     /// sets that file aside.
     func flushUploads() async throws {
+        guard transport != nil else { return }
+        lastUploadError = nil
+        _ = await drainUploads()
+        if let err = lastUploadError {
+            throw err
+        }
+    }
+
+    private func runUploadPass() async {
         guard let transport else { return }
+        uploadRetryTimer?.cancel()
+        uploadRetryTimer = nil
+        lastUploadError = nil
+        var uploadedAny = false
+
         while !stopped,
+              !Task.isCancelled,
               let up = uploads.values
                 .filter({ $0.failed == nil })
                 .min(by: { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }) {
+            let remaining = uploads.values.filter { $0.failed == nil }.count
+            uploadStatus = .uploading(currentID: up.id, remaining: remaining)
             let file = filesDir.appending(path: up.file)
             let att: Attachment
             do {
                 let data = try Data(contentsOf: file)
                 att = try await transport.uploadFile(data, name: up.name, mime: up.mime)
             } catch let e as APIError where !Self.refused(e) {
-                throw e
+                lastUploadError = e
+                if e.status == 401 {
+                    state.status = .error
+                    state.error = "unauthorized"
+                    onUnauthorized?()
+                    refreshUploadStatus()
+                    return
+                }
+                let pending = uploads.values.filter { $0.failed == nil }.count
+                uploadStatus = .waitingForNetwork(remaining: pending)
+                scheduleUploadRetry()
+                return
             } catch {
                 let message = (error as? APIError)?.localizedDescription ?? L10n.s.cannotReadFile
                 uploads[up.id]?.failed = message
@@ -753,7 +904,51 @@ public final class SyncEngine {
             uploads[up.id] = nil
             try? store.delete(.uploads, [up.id])
             try? FileManager.default.removeItem(at: file)
+            uploadRetryDelay = .seconds(2)
+            uploadedAny = true
             updateCounts()
+        }
+
+        refreshUploadStatus()
+        // If uploads completed outside a `sync()` call, push normalized note bodies promptly.
+        if uploadedAny && running == nil && !stopped {
+            scheduleSync(after: min(debounce, .milliseconds(200)))
+        }
+    }
+
+    private func scheduleUploadRetry() {
+        guard !stopped, transport != nil, hasPendingUploads else { return }
+        uploadRetryTimer?.cancel()
+        let delay = uploadRetryDelay
+        uploadRetryDelay = min(uploadRetryDelay * 2, Self.maxRetry)
+        uploadRetryTimer = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else { return }
+            self.uploadRetryTimer = nil
+            await self.drainUploads()
+        }
+    }
+
+    private func refreshUploadStatus() {
+        guard !isLocal else {
+            uploadStatus = .idle
+            return
+        }
+        let pending = uploads.values.filter { $0.failed == nil }.count
+        let failed = uploads.count - pending
+        if pending > 0 {
+            if case .uploading = uploadStatus, uploadTask != nil {
+                return
+            }
+            if !networkOnline || lastUploadError != nil {
+                uploadStatus = .waitingForNetwork(remaining: pending)
+            } else {
+                uploadStatus = .idle
+            }
+        } else if failed > 0 {
+            uploadStatus = .failed(count: failed)
+        } else {
+            uploadStatus = .idle
         }
     }
 
@@ -816,13 +1011,31 @@ public final class SyncEngine {
             uploads[id]?.failed = nil
             any = true
         }
-        if any { scheduleSync(after: .zero) }
+        updateCounts()
+        refreshUploadStatus()
+        if any { resumeUploads() }
     }
 
     // MARK: Queries
 
     /// A local library: no server, no outbox.
     public var isLocal: Bool { transport == nil }
+
+    public var activeUploadID: String? {
+        if case .uploading(let id, _) = uploadStatus { id } else { nil }
+    }
+
+    public var isUploading: Bool {
+        if case .uploading = uploadStatus { true } else { false }
+    }
+
+    public var hasPendingUploads: Bool {
+        uploads.values.contains { $0.failed == nil }
+    }
+
+    public var hasRetryableUploads: Bool {
+        !isLocal && hasPendingUploads
+    }
 
     public var liveNotes: [Note] { notes.values.filter { !$0.isTrashed && !$0.deleted } }
     public var trashedNotes: [Note] { notes.values.filter(\.isTrashed) }

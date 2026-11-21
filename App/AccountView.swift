@@ -5,6 +5,7 @@ struct AccountView: View {
     @Environment(SessionStore.self) private var session
     @Environment(Library.self) private var library
     @Environment(SyncEngine.self) private var engine
+    @Environment(BackgroundUploadManager.self) private var uploads
     @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
 
@@ -86,9 +87,12 @@ struct AccountView: View {
     private func signOut() {
         signingOut = true
         let library = library
+        let uploads = uploads
+        let libraryID = library.ref.id
         Task {
             await library.flush()
             await session.signOut()
+            uploads.evict(libraryID)
             library.destroy()
         }
     }

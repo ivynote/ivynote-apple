@@ -28,6 +28,7 @@ final class MediaLoader {
     @ObservationIgnored private let api: APIClient?
     @ObservationIgnored private weak var engine: SyncEngine?
     @ObservationIgnored private let images = NSCache<NSString, PlatformImage>()
+    @ObservationIgnored private let grantCache = AttachmentGrantCache()
 
     init(api: APIClient?, engine: SyncEngine) {
         self.api = api
@@ -41,16 +42,17 @@ final class MediaLoader {
         }
         let resolvedID = engine?.attachmentCache.canonicalID(id) ?? id
         guard let api else { throw APIError.unreachable(L10n.s.localNoServer) }
-        let (data, response) = try await EditorSchemeHandler.mediaSession.data(for: api.rawRequest(resolvedID, thumb: thumb))
-        let http = response as? HTTPURLResponse
-        if let http, !(200..<300).contains(http.statusCode) {
-            throw APIError.server(status: http.statusCode, message: "")
-        }
-        if http == nil || http?.statusCode == 200 {
-            let mime = http?.value(forHTTPHeaderField: "Content-Type") ?? engine?.attachments[resolvedID]?.mime ?? "application/octet-stream"
-            _ = engine?.attachmentCache.store(id: resolvedID, thumb: thumb, data: data, mime: mime)
-        }
-        return data
+        let mediaTransport = URLSessionTransport(session: EditorSchemeHandler.mediaSession)
+        let result = try await api.downloadAttachment(
+            resolvedID,
+            thumb: thumb,
+            compat: false,
+            grantCache: grantCache,
+            mediaTransport: mediaTransport
+        )
+        let mime = result.mime.isEmpty ? (engine?.attachments[resolvedID]?.mime ?? "application/octet-stream") : result.mime
+        _ = engine?.attachmentCache.store(id: resolvedID, thumb: thumb, data: result.data, mime: mime)
+        return result.data
     }
 
     /// A thumbnail (long side 480) or the full image, kept in memory.

@@ -323,7 +323,9 @@ import Testing
         let api = APIClient(server: server, token: "tok", transport: t)
         let r = try await api.upload(Data("png".utf8), name: "a \"b\".png", mime: "image/png")
         #expect(r.duplicate && r.attachment.refs == 2 && r.attachment.public)
-        let req = try #require(t.sent.first)
+        // Tries direct upload-intent first, then falls back cleanly to multipart on 404.
+        #expect(t.sent.map { $0.url?.path() } == ["/api/v1/attachments/upload-intent", "/api/v1/attachments"])
+        let req = try #require(t.sent.last)
         let type = try #require(req.value(forHTTPHeaderField: "Content-Type"))
         #expect(type.hasPrefix("multipart/form-data; boundary="))
         let body = String(decoding: req.httpBody!, as: UTF8.self)

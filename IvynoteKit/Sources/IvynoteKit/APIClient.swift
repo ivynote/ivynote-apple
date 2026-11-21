@@ -8,6 +8,10 @@ public protocol HTTPTransport: Sendable {
 public struct URLSessionTransport: HTTPTransport {
     let session: URLSession
 
+    public init(session: URLSession) {
+        self.session = session
+    }
+
     public init() {
         // Native clients authenticate with the Bearer token only; no cookies,
         // no shared cache that could keep note content on disk.

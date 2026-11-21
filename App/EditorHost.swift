@@ -44,7 +44,7 @@ final class EditorHost: NSObject {
         self.engine = engine
         self.readonly = readonly
         let config = WKWebViewConfiguration()
-        let schemes = EditorSchemeHandler(account: account) { [weak engine] id in engine?.uploadFile(id) }
+        let schemes = EditorSchemeHandler(account: account, engine: engine)
         config.setURLSchemeHandler(schemes, forURLScheme: EditorSchemeHandler.scheme)
         config.websiteDataStore = .nonPersistent()
         let content = WKUserContentController()
@@ -54,6 +54,11 @@ final class EditorHost: NSObject {
         #endif
         webView = WKWebView(frame: .zero, configuration: config)
         super.init()
+        if !readonly {
+            engine.onResourceNormalized = { [weak self] localID, attachment in
+                self?.normalizeResource(localID: localID, remoteID: attachment.id, kind: attachment.kind)
+            }
+        }
         content.add(WeakMessageHandler(self), name: "ivy")
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -73,8 +78,17 @@ final class EditorHost: NSObject {
 
     // MARK: Swift → page
 
-    func open(_ note: Note, focus: Bool) {
+    func open(_ note: Note, focus: Bool, force: Bool = false) {
         guard let engine else { return }
+        // Same note already loaded (e.g., returning from a sheet or photo picker):
+        // keep the live CodeMirror state, cursor, and scroll position intact.
+        if !force, noteID == note.id {
+            if let p = pendingLine, p.id == note.id {
+                pendingLine = nil
+                scrollToLine(p.line)
+            }
+            return
+        }
         noteID = note.id
         pageBody = note.body
         topLine = 0
@@ -114,11 +128,32 @@ final class EditorHost: NSObject {
         call("ivy.setKinds(map)", ["map": kinds])
     }
 
-    /// Writes a just-added file into the open note at the cursor, on a line
-    /// of its own (guide 7.1).
+    /// Writes a just-added file into the open note at the latest cursor position
+    /// without forcing edit mode or jumping to the start of the document.
     func insertFile(_ file: AddedFile) {
-        call("ivy.setKind(id, kind)", ["id": file.id, "kind": file.kind])
-        call("ivy.insert(text, true)", ["text": file.markdown])
+        insertFiles([file])
+    }
+
+    /// Inserts one or more staged attachments in order in a single transaction,
+    /// keeping focus state and advancing the cursor cleanly after them.
+    func insertFiles(_ files: [AddedFile]) {
+        guard !files.isEmpty else { return }
+        for f in files {
+            call("ivy.setKind(id, kind)", ["id": f.id, "kind": f.kind])
+        }
+        let block = files.map(\.markdown).joined(separator: "\n")
+        call("ivy.insertAttachment(text)", ["text": block])
+    }
+
+    /// Replaces `ivy://res/<localID>` with `ivy://res/<remoteID>` in place after
+    /// background upload finishes, without touching focus, cursor or other edits.
+    func normalizeResource(localID: String, remoteID: String, kind: String) {
+        let old = "ivy://res/\(localID)"
+        let replacement = "ivy://res/\(remoteID)"
+        if pageBody.contains(old) {
+            pageBody = pageBody.replacingOccurrences(of: old, with: replacement)
+        }
+        call("ivy.normalizeResource(localId, remoteId, kind)", ["localId": localID, "remoteId": remoteID, "kind": kind])
     }
 
     /// The notes linking to the open one, listed below its body.
@@ -227,7 +262,7 @@ extension EditorHost: WKNavigationDelegate, WKUIDelegate {
         // The page is gone (memory pressure); load it again and reopen the note.
         ready = false
         webView.load(URLRequest(url: EditorSchemeHandler.pageURL))
-        if let id = noteID, let note = engine?.notes[id] { open(note, focus: false) } else if readonly { show(pageBody) }
+        if let id = noteID, let note = engine?.notes[id] { open(note, focus: false, force: true) } else if readonly { show(pageBody) }
     }
 
     private func openExternally(_ url: URL) {

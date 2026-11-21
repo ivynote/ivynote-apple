@@ -10,13 +10,17 @@ struct AccountView: View {
 
     @State private var confirmSignOut = false
     @State private var signingOut = false
+    @State private var notice: String?
 
     var body: some View {
         NavigationStack {
-            if let account = library.account { form(account) }
+            if let account = library.account {
+                form(account)
+                    .overlay(alignment: .bottom) { NoticeToast(text: $notice) }
+            }
         }
         #if os(macOS)
-        .frame(minWidth: 420, minHeight: 480)
+        .frame(minWidth: 420, minHeight: 540)
         #endif
     }
 
@@ -45,6 +49,7 @@ struct AccountView: View {
                         Button(L.openAdmin) { openURL(account.server.base.appending(path: "admin")) }
                     }
                 }
+                AttachmentCacheSection(notice: $notice)
                 Section {
                     Button(role: .destructive) { confirmSignOut = true } label: {
                         if signingOut { ProgressView() } else { Text(L.signOut) }
@@ -86,5 +91,82 @@ struct AccountView: View {
             await session.signOut()
             library.destroy()
         }
+    }
+}
+
+/// Local attachment cache configuration: local-first toggle, size cap with
+/// access-based eviction, current usage and one-tap clear.
+struct AttachmentCacheSection: View {
+    @Environment(SyncEngine.self) private var engine
+    @Binding var notice: String?
+
+    private let settings = AttachmentCacheSettings.shared
+
+    var body: some View {
+        let cache = engine.attachmentCache
+        let localFirst = Binding(
+            get: { settings.localFirst },
+            set: { settings.localFirst = $0 }
+        )
+        let maxBytes = Binding(
+            get: { settings.maxBytes },
+            set: { settings.maxBytes = $0 }
+        )
+        Section {
+            Toggle(L.localFirstCache, isOn: localFirst)
+            if settings.localFirst {
+                Picker(L.cacheLimit, selection: maxBytes) {
+                    ForEach(AttachmentCacheSettings.presets, id: \.self) { bytes in
+                        Text(bytes == 0 ? L.cacheUnlimited : bytes.byteText).tag(bytes)
+                    }
+                }
+            }
+            LabeledContent(L.cacheUsage) {
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("\(cache.totalBytes.byteText) · \(L.cacheFilesCount(cache.entryCount))")
+                        .monospacedDigit()
+                    if !engine.uploads.isEmpty {
+                        Text(L.cachePendingNote(engine.uploads.count))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Button(L.clearCache, role: .destructive) {
+                cache.clear()
+                notice = L.cacheCleared
+            }
+            .disabled(cache.entryCount == 0 && cache.totalBytes == 0)
+        } header: {
+            Text(L.attachmentCache)
+        } footer: {
+            Text(L.localFirstCacheHint)
+        }
+    }
+}
+
+/// Standalone sheet for configuring attachment cache from the Media Library.
+struct AttachmentCacheSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var notice: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                AttachmentCacheSection(notice: $notice)
+            }
+            .formStyle(.grouped)
+            .navigationTitle(L.attachmentCache)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button(L.done) { dismiss() } }
+            }
+            .overlay(alignment: .bottom) { NoticeToast(text: $notice) }
+        }
+        #if os(macOS)
+        .frame(minWidth: 400, minHeight: 340)
+        #endif
     }
 }

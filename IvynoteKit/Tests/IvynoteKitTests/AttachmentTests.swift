@@ -4,19 +4,68 @@ import Testing
 
 @MainActor
 @Suite struct UploadQueueTests {
-    func engine(_ fake: FakeSync?) throws -> SyncEngine {
+    func engine(_ fake: FakeSync?, now: @escaping () -> Millis = { 1_800_000_000_000 }) throws -> SyncEngine {
         SyncEngine(store: try LocalStore(url: nil), transport: fake, device: "test-1",
-                   debounce: .seconds(3600), persistDelay: .seconds(3600), now: { 1_800_000_000_000 })
+                   debounce: .seconds(3600), persistDelay: .seconds(3600), cacheSettings: nil, now: now)
     }
 
-    @Test func uploadsAtOnceWhenOnline() async throws {
+    @Test func insertsLocallyFirstThenUploadsAndPromotesToCache() async throws {
+        let fake = FakeSync()
+        fake.snapshots = [PullResponse(seq: 1)]
+        let e = try engine(fake)
+        await e.sync()
+
+        var normalized: [(local: String, remote: String)] = []
+        e.onResourceNormalized = { localID, att in
+            normalized.append((localID, att.id))
+        }
+
+        // Inserting a file stages locally right away without hitting the network.
+        let bytes = Data("png-bytes".utf8)
+        let f = try await e.addFile(bytes, name: "photo.png", mime: "image/png")
+        #expect(f.local && f.id.hasPrefix("local-"))
+        #expect(f.markdown == "![photo.png](ivy://res/\(f.id))")
+        #expect(e.uploads[f.id] != nil && e.state.uploads == 1)
+        #expect(fake.uploaded.isEmpty)
+        let localCopy = try #require(e.localAttachment(f.id))
+        #expect(try Data(contentsOf: localCopy.url) == bytes)
+
+        let note = e.createNote(title: "T", body: "look \(f.markdown)\n")
+        fake.uploadHandler = { data, name, mime in
+            Attachment(id: "att00000099", name: name, mime: mime, size: Int64(data.count), createdAt: 1, updatedAt: 1)
+        }
+
+        let syncStart = fake.calls.count
+        await e.sync()
+        #expect(e.uploads.isEmpty && e.state.uploads == 0)
+        #expect(e.attachments["att00000099"]?.kind == "image")
+        #expect(e.notes[note.id]?.body == "look ![photo.png](ivy://res/att00000099)\n")
+        #expect(normalized.count == 1 && normalized[0].local == f.id && normalized[0].remote == "att00000099")
+        // Staging upload file was removed, and the bytes were promoted into the synced local cache.
+        #expect(!FileManager.default.fileExists(atPath: localCopy.url.path))
+        let cached = try #require(e.localAttachment("att00000099"))
+        #expect(try Data(contentsOf: cached.url) == bytes)
+        // Old `local-` ID also resolves via runtime alias without re-downloading.
+        let viaAlias = try #require(e.localAttachment(f.id))
+        #expect(try Data(contentsOf: viaAlias.url) == bytes)
+        // Requesting a thumbnail falls back to the cached full file.
+        let thumbFallback = try #require(e.localAttachment("att00000099", thumb: true))
+        #expect(try Data(contentsOf: thumbFallback.url) == bytes)
+        // Uploaded before push, so the pushed note body already carries the normalized server ID.
+        #expect(Array(fake.calls[syncStart...]) == ["upload:photo.png", "push:1", "pull:1"])
+        let pushed = try #require(fake.pushed.last?.first)
+        #expect(pushed.fields?["body"] == .string("look ![photo.png](ivy://res/att00000099)\n"))
+    }
+
+    @Test func deduplicatesIdenticalPendingUploads() async throws {
         let fake = FakeSync()
         let e = try engine(fake)
-        let f = try await e.addFile(Data("png".utf8), name: "photo.png", mime: "image/png")
-        #expect(!f.local)
-        #expect(f.markdown == "![photo.png](ivy://res/\(f.id))")
-        #expect(e.attachments[f.id]?.kind == "image")
-        #expect(e.uploads.isEmpty)
+        let bytes = Data("same-image-data".utf8)
+        let first = try await e.addFile(bytes, name: "a.png", mime: "image/png")
+        let second = try await e.addFile(bytes, name: "b.png", mime: "image/png")
+        #expect(first.id == second.id)
+        #expect(e.uploads.count == 1)
+        #expect(second.name == "b.png")
     }
 
     @Test func queuesOfflineAndReplacesTheLocalID() async throws {
@@ -34,6 +83,11 @@ import Testing
         #expect(try Data(contentsOf: copy.url) == Data("report".utf8))
         let note = e.createNote(title: "T", body: "see \(f.markdown)\n")
 
+        // Offline sync fails gracefully and keeps the file queued.
+        await e.sync()
+        #expect(e.state.status == .offline)
+        #expect(e.uploads.count == 1)
+
         fake.uploadHandler = { data, name, mime in
             Attachment(id: "att00000001", name: name, mime: mime, size: Int64(data.count), createdAt: 1, updatedAt: 1)
         }
@@ -42,6 +96,8 @@ import Testing
         #expect(e.uploads.isEmpty && e.state.uploads == 0)
         #expect(e.notes[note.id]?.body == "see [report.pdf](ivy://res/att00000001)\n")
         #expect(!FileManager.default.fileExists(atPath: copy.url.path))
+        let cached = try #require(e.localAttachment("att00000001"))
+        #expect(try Data(contentsOf: cached.url) == Data("report".utf8))
         // Uploaded before the push, so the body went out with the server's id.
         #expect(Array(fake.calls[recoveryStart...]) == ["upload:report.pdf", "push:1", "pull:1"])
         let pushed = try #require(fake.pushed.last?.first)
@@ -50,7 +106,6 @@ import Testing
 
     @Test func aRefusedFileStaysQueuedAndSyncGoesOn() async throws {
         let fake = FakeSync()
-        fake.uploadHandler = { _, _, _ in throw APIError.unreachable("offline") }
         let e = try engine(fake)
         let f = try await e.addFile(Data(count: 10), name: "big.mov", mime: "video/quicktime")
         e.createNote(title: "T", body: f.markdown)
@@ -68,7 +123,6 @@ import Testing
 
     @Test func aServerErrorEndsTheRound() async throws {
         let fake = FakeSync()
-        fake.uploadHandler = { _, _, _ in throw APIError.unreachable("offline") }
         let e = try engine(fake)
         _ = try await e.addFile(Data(count: 3), name: "a.png", mime: "image/png")
         fake.uploadHandler = { _, _, _ in throw APIError.server(status: 503, message: "") }
@@ -76,16 +130,6 @@ import Testing
         #expect(e.state.status == .offline)
         #expect(e.uploads.count == 1)
         #expect(fake.pushed.isEmpty)
-    }
-
-    @Test func otherErrorsAreNotQueued() async throws {
-        let fake = FakeSync()
-        fake.uploadHandler = { _, _, _ in throw APIError.server(status: 413, message: "file too large") }
-        let e = try engine(fake)
-        await #expect(throws: APIError.server(status: 413, message: "file too large")) {
-            try await e.addFile(Data(count: 3), name: "a.png", mime: "image/png")
-        }
-        #expect(e.uploads.isEmpty)
     }
 
     @Test func aLocalLibraryKeepsItsFiles() async throws {
@@ -101,14 +145,13 @@ import Testing
         let url = FileManager.default.temporaryDirectory.appending(path: "ivy-up-\(UUID())/library.sqlite")
         defer { LocalStore.remove(at: url) }
         let fake = FakeSync()
-        fake.uploadHandler = { _, _, _ in throw APIError.unreachable("offline") }
         let id: String
         do {
-            let e = SyncEngine(store: try LocalStore(url: url), transport: fake, device: "d", debounce: .seconds(3600))
+            let e = SyncEngine(store: try LocalStore(url: url), transport: fake, device: "d", debounce: .seconds(3600), cacheSettings: nil)
             id = try await e.addFile(Data("x".utf8), name: "a.png", mime: "image/png").id
             e.stop()
         }
-        let e = SyncEngine(store: try LocalStore(url: url), transport: fake, device: "d", debounce: .seconds(3600))
+        let e = SyncEngine(store: try LocalStore(url: url), transport: fake, device: "d", debounce: .seconds(3600), cacheSettings: nil)
         try e.load()
         #expect(e.uploads[id]?.name == "a.png")
         #expect(e.uploadFile(id).map { FileManager.default.fileExists(atPath: $0.url.path) } == true)
@@ -124,6 +167,110 @@ import Testing
         let entry = try #require(e.outbox["tag:\(t.id)"])
         #expect(entry.fields["name"] == .string("job"))
         #expect(entry.fields["color"] == .string("blue"))
+    }
+}
+
+@MainActor
+@Suite struct AttachmentCacheTests {
+    @Test func evictsColdestEntriesWhenLimitExceeded() throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: "ivy-cache-\(UUID())/library.sqlite")
+        defer { LocalStore.remove(at: url) }
+        var clock: Millis = 1_000_000
+        let store = try LocalStore(url: url)
+        let cache = AttachmentStore(store: store, settings: nil, localFirst: true, maxBytes: 250, now: { clock })
+        try cache.load()
+
+        _ = cache.store(id: "att00000001", data: Data(repeating: 1, count: 100), mime: "image/png")
+        clock += 1000
+        _ = cache.store(id: "att00000002", data: Data(repeating: 2, count: 100), mime: "image/png")
+        #expect(cache.totalBytes == 200 && cache.entryCount == 2)
+
+        // Access att00000001 repeatedly so it becomes hotter than att00000002.
+        clock += 1000
+        #expect(cache.cachedFile(id: "att00000001") != nil)
+        clock += 1000
+        #expect(cache.cachedFile(id: "att00000001") != nil)
+
+        // Adding a third 100B file exceeds 250B; coldest (`att00000002`) is evicted.
+        clock += 1000
+        _ = cache.store(id: "att00000003", data: Data(repeating: 3, count: 100), mime: "image/png")
+        #expect(cache.totalBytes == 200 && cache.entryCount == 2)
+        #expect(cache.entry(id: "att00000001") != nil)
+        #expect(cache.entry(id: "att00000002") == nil)
+        #expect(cache.entry(id: "att00000003") != nil)
+
+        // Lowering maxBytes immediately evicts down to the new cap.
+        cache.applyPolicy(localFirst: true, maxBytes: 120)
+        #expect(cache.totalBytes == 100 && cache.entryCount == 1)
+        // `att00000001` had higher accessCount (heat bonus) so it stays warmest.
+        #expect(cache.entry(id: "att00000001") != nil)
+    }
+
+    @Test func localFirstOffClearsSyncedCacheWithoutTouchingPendingUploads() async throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: "ivy-lf-\(UUID())/library.sqlite")
+        defer { LocalStore.remove(at: url) }
+        let fake = FakeSync()
+        let e = SyncEngine(store: try LocalStore(url: url), transport: fake, device: "d", debounce: .seconds(3600), cacheSettings: nil)
+        try e.load()
+
+        _ = e.attachmentCache.store(id: "att00000001", data: Data("cached".utf8), mime: "image/png")
+        let pending = try await e.addFile(Data("pending".utf8), name: "p.png", mime: "image/png")
+        #expect(e.attachmentCache.entryCount == 1)
+        #expect(e.uploads.count == 1)
+
+        // Turning off local-first clears synced cache, but keeps pending uploads intact.
+        e.attachmentCache.applyPolicy(localFirst: false, maxBytes: 500 * 1024 * 1024)
+        #expect(e.attachmentCache.entryCount == 0 && e.attachmentCache.totalBytes == 0)
+        #expect(e.localAttachment("att00000001") == nil)
+        let stillPending = try #require(e.localAttachment(pending.id))
+        #expect(try Data(contentsOf: stillPending.url) == Data("pending".utf8))
+    }
+
+    @Test func persistsAcrossRestartAndReconcilesOrphans() throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: "ivy-persist-\(UUID())/library.sqlite")
+        defer { LocalStore.remove(at: url) }
+        let orphanFile: URL
+        do {
+            let store = try LocalStore(url: url)
+            let cache = AttachmentStore(store: store, settings: nil, localFirst: true, maxBytes: 1024 * 1024)
+            try cache.load()
+            _ = cache.store(id: "att00000010", data: Data("hello".utf8), mime: "image/png")
+            _ = cache.store(id: "att00000010", thumb: true, data: Data("hi".utf8), mime: "image/jpeg")
+            orphanFile = cache.cacheDir.appending(path: "stray-file")
+            try Data("orphan".utf8).write(to: orphanFile)
+            cache.stop()
+        }
+        let store = try LocalStore(url: url)
+        let cache = AttachmentStore(store: store, settings: nil, localFirst: true, maxBytes: 1024 * 1024)
+        try cache.load()
+        #expect(cache.entryCount == 2 && cache.totalBytes == 7)
+        #expect(!FileManager.default.fileExists(atPath: orphanFile.path))
+        let hit = try #require(cache.cachedFile(id: "att00000010"))
+        #expect(try Data(contentsOf: hit.url) == Data("hello".utf8))
+        // Removing attachment deletes both full and thumbnail cache entries.
+        cache.remove(attachmentID: "att00000010")
+        #expect(cache.entryCount == 0 && cache.totalBytes == 0)
+    }
+
+    @Test func settingsPropagateToAttachmentStore() throws {
+        let suite = "ivy.test.cache.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let settings = AttachmentCacheSettings(defaults: defaults)
+        #expect(settings.localFirst == true)
+        #expect(settings.maxBytes == AttachmentCacheSettings.defaultMaxBytes)
+
+        let url = FileManager.default.temporaryDirectory.appending(path: "ivy-set-\(UUID())/library.sqlite")
+        defer { LocalStore.remove(at: url) }
+        let cache = AttachmentStore(store: try LocalStore(url: url), settings: settings)
+        try cache.load()
+        _ = cache.store(id: "att11111111", data: Data(repeating: 7, count: 200), mime: "image/png")
+        #expect(cache.totalBytes == 200)
+
+        settings.maxBytes = 100
+        #expect(cache.maxBytes == 100 && cache.totalBytes == 0)
+        cache.stop()
     }
 }
 

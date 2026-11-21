@@ -269,8 +269,8 @@ public struct Attachment: Codable, Equatable, Identifiable, Sendable {
     public var markdown: String { Self.markdown(id: id, name: name, kind: kind) }
 }
 
-/// A file added while the server could not be reached, kept under a `local-`
-/// id until `SyncEngine.flushUploads` sends it (guide 7.2).
+/// A file copied into the local attachment library, waiting to be uploaded
+/// in the background until `SyncEngine.flushUploads` sends it (guide 7.2).
 public struct PendingUpload: Codable, Equatable, Identifiable, Sendable {
     public static let prefix = "local-"
 
@@ -281,8 +281,21 @@ public struct PendingUpload: Codable, Equatable, Identifiable, Sendable {
     public var file: String
     public var size: Int64
     public var createdAt: Millis
+    /// Plain SHA-256 hex, for local deduplication before upload.
+    public var sha256: String?
     /// Why the server refused it; not tried again until the app restarts.
     public var failed: String?
+
+    public init(id: String, name: String, mime: String, file: String, size: Int64, createdAt: Millis, sha256: String? = nil, failed: String? = nil) {
+        self.id = id
+        self.name = name
+        self.mime = mime
+        self.file = file
+        self.size = size
+        self.createdAt = createdAt
+        self.sha256 = sha256
+        self.failed = failed
+    }
 
     public var kind: String { Attachment.kind(of: mime).rawValue }
 }

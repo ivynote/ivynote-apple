@@ -9,7 +9,7 @@ import SQLite3
 /// plain text (guide 8.3); the file is protected by iOS data protection.
 public final class LocalStore {
     enum Table: String, CaseIterable {
-        case notes, folders, tags, attachments, outbox, uploads
+        case notes, folders, tags, attachments, outbox, uploads, cache
     }
 
     public struct StoreError: Error, CustomStringConvertible {
@@ -144,6 +144,12 @@ public final class LocalStore {
     /// removing the library removes them too. Nil for an in-memory store.
     public var filesURL: URL? {
         url?.deletingLastPathComponent().appending(path: "uploads", directoryHint: .isDirectory)
+    }
+
+    /// Where synced attachment cache files live: next to the database, so
+    /// removing the library removes them too. Nil for an in-memory store.
+    public var attachmentsURL: URL? {
+        url?.deletingLastPathComponent().appending(path: "attachments", directoryHint: .isDirectory)
     }
 
     /// Deletes a library's database and everything next to it.

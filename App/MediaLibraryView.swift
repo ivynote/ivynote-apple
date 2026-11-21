@@ -24,6 +24,7 @@ struct MediaLibraryView: View {
     @State private var pickers = AttachmentPickerState()
     @State private var uploading = 0
     @State private var path: [String] = []
+    @State private var showCacheSettings = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -54,11 +55,15 @@ struct MediaLibraryView: View {
                 Button(L.ok, role: .cancel) {}
             } message: { Text(error ?? "") }
             .overlay(alignment: .bottom) { NoticeToast(text: $notice) }
+            .sheet(isPresented: $showCacheSettings) { AttachmentCacheSheet() }
         }
         #if os(macOS)
         .frame(minWidth: 720, minHeight: 560)
         #endif
         .onAppear { if loader == nil { loader = MediaLoader(api: library.api, engine: engine) } }
+        .onChange(of: engine.uploads.count) { old, new in
+            if new < old { reload() }
+        }
         .task(id: "\(filter.rawValue)|\(query)") {
             // Typing: wait for a pause before asking the server.
             if !query.isEmpty {
@@ -161,6 +166,10 @@ struct MediaLibraryView: View {
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) { Button(L.close) { dismiss() } }
         ToolbarItem(placement: .primaryAction) {
+            Button(L.cacheSettings, systemImage: "internaldrive") { showCacheSettings = true }
+                .help(L.cacheSettings)
+        }
+        ToolbarItem(placement: .primaryAction) {
             Menu {
                 Button(L.photoOrVideo, systemImage: "photo.on.rectangle") { pickers.photos = true }
                 if AttachmentPickerState.cameraAvailable {
@@ -168,7 +177,8 @@ struct MediaLibraryView: View {
                 }
                 Button(L.file, systemImage: "doc") { pickers.files = true }
             } label: {
-                if uploading > 0 { ProgressView().controlSize(.small) } else { Label(L.upload, systemImage: "square.and.arrow.up") }
+                let pending = uploading + (engine.isLocal || engine.state.status == .offline ? 0 : engine.uploads.values.filter { $0.failed == nil }.count)
+                if pending > 0 { ProgressView().controlSize(.small) } else { Label(L.upload, systemImage: "square.and.arrow.up") }
             }
             .disabled(library.api == nil)
             .help(L.uploadFiles)
@@ -226,25 +236,16 @@ struct MediaLibraryView: View {
     private func upload(_ files: [AttachmentInserter.File]) {
         guard !files.isEmpty else { return }
         uploading += files.count
-        Task {
-            var dedup = 0
-            for f in files {
-                defer { uploading -= 1 }
-                do {
-                    if let api = library.api, !offline {
-                        let res = try await api.upload(f.data, name: f.name, mime: f.mime)
-                        engine.putAttachment(res.attachment)
-                        if res.duplicate { dedup += 1 }
-                    } else {
-                        _ = try await engine.addFile(f.data, name: f.name, mime: f.mime)
-                        notice = L.savedLocallyUploadLater
-                    }
-                } catch {
-                    self.error = L.uploadFailed(f.name, error.localizedDescription)
-                }
+        defer { uploading -= files.count }
+        for f in files {
+            do {
+                _ = try engine.addFileLocal(f.data, name: f.name, mime: f.mime)
+            } catch {
+                self.error = L.uploadFailed(f.name, error.localizedDescription)
             }
-            if dedup > 0 { notice = L.duplicateMerged }
-            await load()
+        }
+        if offline || engine.state.status == .offline {
+            notice = L.savedLocallyUploadLater
         }
     }
 }

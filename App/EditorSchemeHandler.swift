@@ -17,28 +17,35 @@ final class EditorSchemeHandler: NSObject, WKURLSchemeHandler {
     private let root: URL?
     /// Nil in a local library, which has no server to fetch attachments from.
     private let account: StoredAccount?
-    /// The copy of a file waiting to be uploaded (`local-` ids).
-    private let localFile: @MainActor (String) -> (url: URL, mime: String)?
+    /// Local-first lookup: checks pending uploads and synced local cache.
+    private let localLookup: @MainActor (String, Bool) -> (url: URL, mime: String)?
+    /// Resolves any `local-` alias to its canonical server ID.
+    private let canonicalID: @MainActor (String) -> String
+    /// Persists downloaded bytes into the library's local attachment cache.
+    private let cacheStore: @MainActor (String, Bool, Data, String) -> Void
     private let session: URLSession
     private var running: [ObjectIdentifier: Task<Void, Never>] = [:]
 
-    init(account: StoredAccount?, localFile: @escaping @MainActor (String) -> (url: URL, mime: String)? = { _ in nil }) {
+    init(account: StoredAccount?, engine: SyncEngine?) {
         self.account = account
-        self.localFile = localFile
+        self.localLookup = { [weak engine] id, thumb in engine?.localAttachment(id, thumb: thumb) }
+        self.canonicalID = { [weak engine] id in engine?.attachmentCache.canonicalID(id) ?? id }
+        self.cacheStore = { [weak engine] id, thumb, data, mime in
+            _ = engine?.attachmentCache.store(id: id, thumb: thumb, data: data, mime: mime)
+        }
         root = Bundle.main.url(forResource: "Editor", withExtension: nil)
         session = Self.mediaSession
     }
 
-    /// Attachments never change under the same id: keep them for offline
-    /// reading and answer from the cache without asking again. One session
-    /// for the editor and the media library, so both share the cache.
+    /// Network session for uncached attachments: disk caching is owned by
+    /// `AttachmentStore` so limits, access-based eviction and sign-out cleanup
+    /// stay under one roof without storing duplicate copies.
     static let mediaSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.httpCookieStorage = nil
         config.httpShouldSetCookies = false
-        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appending(path: "ivy-media")
-        config.urlCache = URLCache(memoryCapacity: 32 << 20, diskCapacity: 512 << 20, directory: dir)
-        config.requestCachePolicy = .returnCacheDataElseLoad
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
         return URLSession(configuration: config)
     }()
 
@@ -71,24 +78,25 @@ final class EditorSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     private func fetchAttachment(id: String, thumb: Bool, task: any WKURLSchemeTask) {
-        // Not uploaded yet: shown from this device (guide 7.2).
-        if id.hasPrefix(PendingUpload.prefix) {
-            guard let file = localFile(id), let data = try? Data(contentsOf: file.url) else {
-                return respond(task, status: 404, headers: [:], data: Data())
-            }
-            return respondLocal(task, data: data, mime: file.mime)
+        // Local-first: pending upload (`local-*`), promoted alias, or cached synced file.
+        if let local = localLookup(id, thumb), let data = try? Data(contentsOf: local.url) {
+            return respondLocal(task, data: data, mime: local.mime)
         }
-        guard let account, id.wholeMatch(of: /[A-Za-z0-9_-]{8,64}/) != nil else {
+        let resolvedID = canonicalID(id)
+        if resolvedID.hasPrefix(PendingUpload.prefix) {
             return respond(task, status: 404, headers: [:], data: Data())
         }
-        var url = account.server.apiBase.appending(path: "attachments/\(id)/raw")
+        guard let account, resolvedID.wholeMatch(of: /[A-Za-z0-9_-]{8,64}/) != nil else {
+            return respond(task, status: 404, headers: [:], data: Data())
+        }
+        var url = account.server.apiBase.appending(path: "attachments/\(resolvedID)/raw")
         if thumb { url.append(queryItems: [URLQueryItem(name: "thumb", value: "1")]) }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(account.token)", forHTTPHeaderField: "Authorization")
-        // Videos and audio seek with byte ranges; pass them through.
-        if let range = task.request.value(forHTTPHeaderField: "Range") {
+        // Videos and audio seek with byte ranges; pass them through without caching partials.
+        let range = task.request.value(forHTTPHeaderField: "Range")
+        if let range {
             req.setValue(range, forHTTPHeaderField: "Range")
-            req.cachePolicy = .reloadIgnoringLocalCacheData
         }
         let key = ObjectIdentifier(task)
         let session = session
@@ -97,15 +105,20 @@ final class EditorSchemeHandler: NSObject, WKURLSchemeHandler {
                 let (data, response) = try await session.data(for: req)
                 guard let self, self.running.removeValue(forKey: key) != nil else { return }
                 let http = response as? HTTPURLResponse
-                editorLog.debug("res \(id, privacy: .public) -> \(http?.statusCode ?? 0) \(data.count) bytes")
+                let status = http?.statusCode ?? 200
+                editorLog.debug("res \(resolvedID, privacy: .public) -> \(status) \(data.count) bytes")
                 var headers: [String: String] = [:]
                 for name in ["Content-Type", "Content-Range", "Accept-Ranges", "Content-Length"] {
                     if let v = http?.value(forHTTPHeaderField: name) { headers[name] = v }
                 }
-                self.respond(task, status: http?.statusCode ?? 200, headers: headers, data: data)
+                if status == 200 && range == nil {
+                    let mime = headers["Content-Type"] ?? "application/octet-stream"
+                    self.cacheStore(resolvedID, thumb, data, mime)
+                }
+                self.respond(task, status: status, headers: headers, data: data)
             } catch {
                 guard let self, self.running.removeValue(forKey: key) != nil else { return }
-                editorLog.error("res \(id, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                editorLog.error("res \(resolvedID, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
                 self.fail(task, error)
             }
         }

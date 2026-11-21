@@ -302,6 +302,19 @@ public protocol Strings: Sendable {
     var filterAudio: String { get }
     var filterFiles: String { get }
 
+    // Attachment cache
+    var attachmentCache: String { get }
+    var localFirstCache: String { get }
+    var localFirstCacheHint: String { get }
+    var cacheLimit: String { get }
+    var cacheUnlimited: String { get }
+    var cacheUsage: String { get }
+    func cacheFilesCount(_ n: Int) -> String
+    var clearCache: String { get }
+    var cacheCleared: String { get }
+    func cachePendingNote(_ n: Int) -> String
+    var cacheSettings: String { get }
+
     // Sign in
     var cannotConnect: String { get }
     var register: String { get }
@@ -687,6 +700,19 @@ public struct ZhStrings: Strings {
     public let filterVideo = "视频"
     public let filterAudio = "音频"
     public let filterFiles = "文件"
+
+    // Attachment cache
+    public let attachmentCache = "附件缓存"
+    public let localFirstCache = "本地优先缓存"
+    public let localFirstCacheHint = "优先从本地附件库读取并缓存已同步附件，达到上限时按访问频率与时间自动清理最冷的文件；待上传文件不会被清理。"
+    public let cacheLimit = "缓存上限"
+    public let cacheUnlimited = "不限制"
+    public let cacheUsage = "当前占用"
+    public func cacheFilesCount(_ n: Int) -> String { "\(n) 个文件" }
+    public let clearCache = "清理附件缓存"
+    public let cacheCleared = "附件缓存已清理"
+    public func cachePendingNote(_ n: Int) -> String { "另有 \(n) 个待上传文件保留在本地" }
+    public let cacheSettings = "缓存管理"
 
     // Sign in
     public let cannotConnect = "无法连接服务器"
@@ -1086,6 +1112,19 @@ public struct EnStrings: Strings {
     public let filterVideo = "Video"
     public let filterAudio = "Audio"
     public let filterFiles = "Files"
+
+    // Attachment cache
+    public let attachmentCache = "Attachment cache"
+    public let localFirstCache = "Local-first cache"
+    public let localFirstCacheHint = "Read attachments from the local store first and keep synced files cached up to the limit. Coldest files are evicted automatically; pending uploads are never evicted."
+    public let cacheLimit = "Cache limit"
+    public let cacheUnlimited = "Unlimited"
+    public let cacheUsage = "Current usage"
+    public func cacheFilesCount(_ n: Int) -> String { count(n, "file") }
+    public let clearCache = "Clear attachment cache"
+    public let cacheCleared = "Attachment cache cleared"
+    public func cachePendingNote(_ n: Int) -> String { "\(count(n, "pending upload")) kept locally" }
+    public let cacheSettings = "Cache settings"
 
     // Sign in
     public let cannotConnect = "Cannot reach the server"

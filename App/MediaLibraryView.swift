@@ -142,16 +142,28 @@ struct MediaLibraryView: View {
 
     private var queued: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(L.waitingUploads(engine.uploads.count)).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            HStack {
+                Text(L.waitingUploads(engine.uploads.count)).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer()
+                if case .waitingForNetwork = engine.uploadStatus {
+                    Button(L.uploadNow) { engine.resumeUploads() }.font(.footnote)
+                }
+            }
             ForEach(engine.uploads.values.sorted { $0.createdAt > $1.createdAt }) { u in
                 HStack(spacing: 10) {
                     AttachmentThumbnail(id: u.id, kind: u.kind, hasThumb: false)
                         .frame(width: 36, height: 36)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    VStack(alignment: .leading) {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(u.name).lineLimit(1)
-                        Text(u.failed.map { L.notUploaded($0) } ?? (engine.isLocal ? L.savedOnDevice : L.uploadsWhenOnline))
-                            .font(.caption).foregroundStyle(u.failed == nil ? Color.secondary : Color.red)
+                        HStack(spacing: 4) {
+                            if engine.activeUploadID == u.id {
+                                ProgressView().controlSize(.mini)
+                            }
+                            Text(uploadItemStatus(for: u))
+                                .font(.caption)
+                                .foregroundStyle(u.failed == nil ? Color.secondary : Color.red)
+                        }
                     }
                     Spacer()
                     Text(u.size.byteText).font(.caption).foregroundStyle(.secondary)
@@ -161,6 +173,14 @@ struct MediaLibraryView: View {
                 Button(L.retryUpload) { engine.retryFailedUploads() }.font(.footnote)
             }
         }
+    }
+
+    private func uploadItemStatus(for u: PendingUpload) -> String {
+        if let err = u.failed { return L.notUploaded(err) }
+        if engine.isLocal { return L.savedOnDevice }
+        if engine.activeUploadID == u.id { return L.uploadingNow }
+        if case .waitingForNetwork = engine.uploadStatus { return L.uploadsWhenOnline }
+        return L.queuedForUpload
     }
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
@@ -177,7 +197,7 @@ struct MediaLibraryView: View {
                 }
                 Button(L.file, systemImage: "doc") { pickers.files = true }
             } label: {
-                let pending = uploading + (engine.isLocal || engine.state.status == .offline ? 0 : engine.uploads.values.filter { $0.failed == nil }.count)
+                let pending = uploading + (engine.isUploading ? max(1, engine.uploads.values.filter { $0.failed == nil }.count) : 0)
                 if pending > 0 { ProgressView().controlSize(.small) } else { Label(L.upload, systemImage: "square.and.arrow.up") }
             }
             .disabled(library.api == nil)

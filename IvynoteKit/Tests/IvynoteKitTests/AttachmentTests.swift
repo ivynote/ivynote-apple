@@ -157,6 +157,84 @@ import Testing
         #expect(e.uploadFile(id).map { FileManager.default.fileExists(atPath: $0.url.path) } == true)
     }
 
+    @Test func noteEditingDoesNotCancelOrDelayBackgroundUploads() async throws {
+        let fake = FakeSync()
+        fake.uploadHandler = { data, name, mime in
+            Attachment(id: "attbg00001", name: name, mime: mime, size: Int64(data.count), createdAt: 1, updatedAt: 1)
+        }
+        // Long note sync debounce (3600s), short independent upload delay (20ms).
+        let e = SyncEngine(store: try LocalStore(url: nil), transport: fake, device: "test-bg",
+                           debounce: .seconds(3600), persistDelay: .seconds(3600),
+                           uploadDelay: .milliseconds(20), cacheSettings: nil)
+        let f = try e.addFileLocal(Data("photo".utf8), name: "photo.jpg", mime: "image/jpeg")
+        let note = e.createNote(title: "Draft", body: f.markdown)
+
+        // Rapidly edit the note — this keeps resetting the sync debounce timer,
+        // but must NOT cancel or delay the independent background upload worker.
+        for i in 0..<6 {
+            e.updateNote(note.id, .init(body: "\(f.markdown)\nedit \(i)"))
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        // Wait briefly for the independent background uploader to finish.
+        for _ in 0..<40 where !e.uploads.isEmpty {
+            try await Task.sleep(for: .milliseconds(15))
+        }
+        #expect(e.uploads.isEmpty)
+        #expect(e.uploadStatus == .idle)
+        #expect(e.attachments["attbg00001"] != nil)
+        #expect(e.notes[note.id]?.body.contains("ivy://res/attbg00001") == true)
+        e.stop()
+    }
+
+    @Test func networkRecoveryAutomaticallyResumesPendingUploads() async throws {
+        let fake = FakeSync()
+        fake.uploadHandler = { _, _, _ in throw APIError.unreachable("offline") }
+        let e = SyncEngine(store: try LocalStore(url: nil), transport: fake, device: "test-net",
+                           debounce: .seconds(3600), persistDelay: .seconds(3600),
+                           uploadDelay: .milliseconds(10), cacheSettings: nil)
+        let f = try e.addFileLocal(Data("offline-file".utf8), name: "doc.pdf", mime: "application/pdf")
+        _ = await e.drainUploads()
+        #expect(e.uploadStatus == .waitingForNetwork(remaining: 1))
+        #expect(e.uploads[f.id] != nil)
+
+        // Network returns: setNetworkReachable(true) must immediately resume
+        // background uploads without waiting for backoff or manual sync().
+        fake.uploadHandler = { data, name, mime in
+            Attachment(id: "attnet0001", name: name, mime: mime, size: Int64(data.count), createdAt: 1, updatedAt: 1)
+        }
+        e.setNetworkReachable(true)
+
+        for _ in 0..<40 where !e.uploads.isEmpty {
+            try await Task.sleep(for: .milliseconds(15))
+        }
+        #expect(e.uploads.isEmpty)
+        #expect(e.uploadStatus == .idle)
+        #expect(e.attachments["attnet0001"] != nil)
+        e.stop()
+    }
+
+    @Test func uploadStatusTracksRefusalAndRetry() async throws {
+        let fake = FakeSync()
+        fake.uploadHandler = { _, _, _ in throw APIError.server(status: 413, message: "too large") }
+        let e = try engine(fake)
+        _ = try e.addFileLocal(Data("big".utf8), name: "big.bin", mime: "application/octet-stream")
+        _ = await e.drainUploads()
+        #expect(e.uploadStatus == .failed(count: 1))
+
+        fake.uploadHandler = { data, name, mime in
+            Attachment(id: "attretry01", name: name, mime: mime, size: Int64(data.count), createdAt: 1, updatedAt: 1)
+        }
+        e.retryFailedUploads()
+        for _ in 0..<40 where !e.uploads.isEmpty {
+            try await Task.sleep(for: .milliseconds(15))
+        }
+        #expect(e.uploads.isEmpty)
+        #expect(e.uploadStatus == .idle)
+        #expect(e.attachments["attretry01"] != nil)
+        e.stop()
+    }
+
     @Test func editsTags() throws {
         let e = try engine(FakeSync())
         let t = e.createTag(name: "#work")
@@ -323,7 +401,9 @@ import Testing
         let api = APIClient(server: server, token: "tok", transport: t)
         let r = try await api.upload(Data("png".utf8), name: "a \"b\".png", mime: "image/png")
         #expect(r.duplicate && r.attachment.refs == 2 && r.attachment.public)
-        let req = try #require(t.sent.first)
+        // Tries direct upload-intent first, then falls back cleanly to multipart on 404.
+        #expect(t.sent.map { $0.url?.path() } == ["/api/v1/attachments/upload-intent", "/api/v1/attachments"])
+        let req = try #require(t.sent.last)
         let type = try #require(req.value(forHTTPHeaderField: "Content-Type"))
         #expect(type.hasPrefix("multipart/form-data; boundary="))
         let body = String(decoding: req.httpBody!, as: UTF8.self)

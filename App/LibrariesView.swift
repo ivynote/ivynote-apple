@@ -6,6 +6,7 @@ import SwiftUI
 /// a local library is the quiet alternative and can turn on sync later.
 struct LibrariesView: View {
     @Environment(LibraryCatalog.self) private var catalog
+    @Environment(BackgroundUploadManager.self) private var uploads
     @State private var path: [Route] = []
     @State private var creatingLocal = false
     @State private var renaming: LibraryRef?
@@ -138,7 +139,10 @@ struct LibrariesView: View {
                 Button(L.save) { if let r = renaming { catalog.rename(r.id, to: nameDraft) } }
             }
             .confirmationDialog(L.removeLibrary, isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { ref in
-                Button(L.removeNamed(ref.name), role: .destructive) { catalog.remove(ref.id) }
+                Button(L.removeNamed(ref.name), role: .destructive) {
+                    uploads.evict(ref.id)
+                    catalog.remove(ref.id)
+                }
             } message: { ref in
                 Text(ref.isLocal
                      ? L.removeLocalMessage(ref.name)
@@ -174,6 +178,7 @@ struct LibrariesView: View {
 }
 
 struct LibraryRow: View {
+    @Environment(BackgroundUploadManager.self) private var uploads
     let ref: LibraryRef
 
     var body: some View {
@@ -182,12 +187,40 @@ struct LibraryRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(ref.name).font(.body.weight(.medium)).lineLimit(1)
                 Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                if let status = uploads.uploadStatus(for: ref.id) {
+                    uploadBadge(status)
+                }
             }
             Spacer(minLength: 0)
             Image(systemName: "chevron.forward").font(.caption.weight(.semibold)).foregroundStyle(.quaternary)
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
+    }
+
+    @ViewBuilder private func uploadBadge(_ status: UploadStatus) -> some View {
+        switch status {
+        case .uploading(_, let remaining):
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.mini)
+                Text(L.uploadingFilesBackground(remaining))
+            }
+            .font(.caption)
+            .foregroundStyle(Color.accentColor)
+        case .waitingForNetwork(let remaining):
+            HStack(spacing: 4) {
+                Image(systemName: "wifi.slash")
+                Text(L.uploadsWaitingNetwork(remaining))
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        case .failed(let count):
+            Text(L.uploadsFailedCount(count))
+                .font(.caption)
+                .foregroundStyle(.orange)
+        case .idle:
+            EmptyView()
+        }
     }
 
     private var detail: String {

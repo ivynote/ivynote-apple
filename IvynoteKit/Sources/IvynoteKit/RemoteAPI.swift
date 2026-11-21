@@ -10,6 +10,11 @@ public struct UploadResult: Decodable, Sendable {
     /// The same bytes were uploaded before; `attachment` is that file.
     public var duplicate: Bool
 
+    public init(attachment: Attachment, duplicate: Bool = false) {
+        self.attachment = attachment
+        self.duplicate = duplicate
+    }
+
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         attachment = try c.decode(Attachment.self, forKey: .attachment)
@@ -206,16 +211,25 @@ public struct Share: Decodable, Equatable, Identifiable, Sendable {
 extension APIClient {
     // MARK: Attachments (guide 5.6)
 
-    /// Uploads a file as `multipart/form-data`, field `file`. The server
-    /// dedups by content, so the same bytes give the same attachment.
+    /// Uploads a file. When the server is configured for S3 attachment storage,
+    /// attempts client-side encrypted direct S3 upload first (`upload-intent` ->
+    /// `PUT` to S3 -> `upload-complete`), falling back transparently to
+    /// multipart `POST /attachments`. The server dedups by content hash.
     public func upload(_ data: Data, name: String, mime: String) async throws -> UploadResult {
+        if let direct = try await tryDirectUpload(data, name: name, mime: mime) {
+            return direct
+        }
+        return try await uploadMultipart(data, name: name, mime: mime)
+    }
+
+    public func uploadMultipart(_ data: Data, name: String, mime: String) async throws -> UploadResult {
         var req = try request("POST", "attachments", body: nil)
         let boundary = "ivy-\(newEntityID())\(newEntityID())"
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.httpBody = Self.multipart(data, name: name, mime: mime, boundary: boundary)
-        // Large files take a while; the session's idle timeout still applies.
+        // Large files take a while; use the dedicated upload session.
         req.timeoutInterval = 600
-        let body = try await perform(req)
+        let body = try await performUpload(req)
         do {
             return try JSONDecoder().decode(UploadResult.self, from: body)
         } catch {

@@ -724,8 +724,25 @@ struct SyncStatusView: View {
             if s.blocked > 0 {
                 Text(L.blocked(s.blocked)).foregroundStyle(.orange)
             }
-            if s.uploads > 0 && !engine.isLocal {
-                Text(L.uploadsPending(s.uploads))
+            if !engine.isLocal {
+                switch engine.uploadStatus {
+                case .uploading(_, let remaining):
+                    HStack(spacing: 5) {
+                        ProgressView().controlSize(.mini)
+                        Text(L.uploadingFilesBackground(remaining))
+                    }
+                case .waitingForNetwork(let remaining):
+                    HStack(spacing: 5) {
+                        Image(systemName: "wifi.slash")
+                        Text(L.uploadsWaitingNetwork(remaining))
+                    }
+                case .failed(let count):
+                    Text(L.uploadsFailedCount(count)).foregroundStyle(.orange)
+                case .idle:
+                    if s.uploads > 0 {
+                        Text(L.uploadsPending(s.uploads))
+                    }
+                }
             }
         }
         .font(.footnote)

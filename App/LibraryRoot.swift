@@ -46,6 +46,7 @@ struct LibraryRoot: View {
 /// Opens a library's database and drives it with the app lifecycle.
 struct OpenLibraryView: View {
     @Environment(LibraryCatalog.self) private var catalog
+    @Environment(BackgroundUploadManager.self) private var uploads
     @Environment(SessionStore.self) private var session: SessionStore?
     @Environment(\.scenePhase) private var scenePhase
     let ref: LibraryRef
@@ -103,7 +104,7 @@ struct OpenLibraryView: View {
             if let session { Task { await Self.pushLanguage(session, key) } }
         }
         do {
-            let lib = try Library(ref: ref, account: account, storeURL: url)
+            let lib = try uploads.acquire(ref: ref, account: account, storeURL: url)
             lib.engine.onUnauthorized = { [weak session] in session?.sessionRejected() }
             library = lib
             editor = EditorHost(account: account, engine: lib.engine)
@@ -120,17 +121,14 @@ struct OpenLibraryView: View {
         if await session.pushLanguage(tag) { language.pushed(key, tag: tag) }
     }
 
-    /// Switching libraries: save now, push what is pending, then stop.
+    /// Switching libraries: hand off to the global background upload manager so
+    /// pending uploads keep draining reliably after leaving this view.
     private func close() {
         if let account {
             LanguageSettings.shared.accountClosed(LanguageSettings.accountKey(server: account.server, userID: account.user.id))
         }
-        guard let library else { return }
-        library.deactivate()
-        Task {
-            await library.flush()
-            library.close()
-        }
+        guard library != nil else { return }
+        uploads.releaseFromForeground(ref.id)
     }
 
     private func handle(_ phase: ScenePhase) {
@@ -148,17 +146,21 @@ struct OpenLibraryView: View {
         case .background:
             library.deactivate()
             guard !ref.isLocal else { return }
-            // Ask for time to push what was just written (guide 6.8).
-            #if os(iOS)
-            let backgroundTask = LibraryBackgroundTask()
-            backgroundTask.begin()
-            Task {
-                await library.flush()
-                backgroundTask.end()
+            // Global `BackgroundUploadManager` also flushes pending uploads and
+            // outbox changes with an iOS background task; flush any remaining
+            // quick sync here when nothing is queued.
+            if !library.engine.hasRetryableUploads && library.engine.state.pending == 0 {
+                #if os(iOS)
+                let backgroundTask = LibraryBackgroundTask()
+                backgroundTask.begin()
+                Task {
+                    await library.flush()
+                    backgroundTask.end()
+                }
+                #else
+                Task { await library.flush() }
+                #endif
             }
-            #else
-            Task { await library.flush() }
-            #endif
         default:
             library.engine.persistNow()
         }

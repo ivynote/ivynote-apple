@@ -24,6 +24,7 @@ final class EditorSchemeHandler: NSObject, WKURLSchemeHandler {
     /// Persists downloaded bytes into the library's local attachment cache.
     private let cacheStore: @MainActor (String, Bool, Data, String) -> Void
     private let session: URLSession
+    private let grantCache = AttachmentGrantCache()
     private var running: [ObjectIdentifier: Task<Void, Never>] = [:]
 
     init(account: StoredAccount?, engine: SyncEngine?) {
@@ -89,33 +90,54 @@ final class EditorSchemeHandler: NSObject, WKURLSchemeHandler {
         guard let account, resolvedID.wholeMatch(of: /[A-Za-z0-9_-]{8,64}/) != nil else {
             return respond(task, status: 404, headers: [:], data: Data())
         }
-        var url = account.server.apiBase.appending(path: "attachments/\(resolvedID)/raw")
-        if thumb { url.append(queryItems: [URLQueryItem(name: "thumb", value: "1")]) }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(account.token)", forHTTPHeaderField: "Authorization")
-        // Videos and audio seek with byte ranges; pass them through without caching partials.
+        // Videos and audio seek with byte ranges; pass them through (or decrypt
+        // only the needed 1 MiB chunks directly from S3/CDN) without caching partials.
         let range = task.request.value(forHTTPHeaderField: "Range")
-        if let range {
-            req.setValue(range, forHTTPHeaderField: "Range")
-        }
         let key = ObjectIdentifier(task)
-        let session = session
+        let mediaTransport = URLSessionTransport(session: session)
+        let api = APIClient(server: account.server, token: account.token, transport: mediaTransport)
+        let grantCache = self.grantCache
         running[key] = Task { [weak self] in
             do {
-                let (data, response) = try await session.data(for: req)
+                if let range {
+                    let result = try await api.downloadAttachmentRange(
+                        resolvedID,
+                        thumb: thumb,
+                        compat: false,
+                        rangeHeader: range,
+                        grantCache: grantCache,
+                        mediaTransport: mediaTransport
+                    )
+                    guard let self, self.running.removeValue(forKey: key) != nil else { return }
+                    editorLog.debug("res \(resolvedID, privacy: .public) range -> \(result.status) \(result.data.count) bytes")
+                    self.respond(task, status: result.status, headers: result.headers, data: result.data)
+                } else {
+                    let result = try await api.downloadAttachment(
+                        resolvedID,
+                        thumb: thumb,
+                        compat: false,
+                        grantCache: grantCache,
+                        mediaTransport: mediaTransport
+                    )
+                    guard let self, self.running.removeValue(forKey: key) != nil else { return }
+                    editorLog.debug("res \(resolvedID, privacy: .public) -> 200 \(result.data.count) bytes")
+                    self.cacheStore(resolvedID, thumb, result.data, result.mime)
+                    let headers = [
+                        "Content-Type": result.mime,
+                        "Accept-Ranges": "bytes",
+                        "Content-Length": "\(result.data.count)",
+                    ]
+                    self.respond(task, status: 200, headers: headers, data: result.data)
+                }
+            } catch let e as APIError {
                 guard let self, self.running.removeValue(forKey: key) != nil else { return }
-                let http = response as? HTTPURLResponse
-                let status = http?.statusCode ?? 200
-                editorLog.debug("res \(resolvedID, privacy: .public) -> \(status) \(data.count) bytes")
-                var headers: [String: String] = [:]
-                for name in ["Content-Type", "Content-Range", "Accept-Ranges", "Content-Length"] {
-                    if let v = http?.value(forHTTPHeaderField: name) { headers[name] = v }
+                if let status = e.status {
+                    editorLog.debug("res \(resolvedID, privacy: .public) -> \(status)")
+                    self.respond(task, status: status, headers: [:], data: Data())
+                } else {
+                    editorLog.error("res \(resolvedID, privacy: .public) failed: \(e.localizedDescription, privacy: .public)")
+                    self.fail(task, e)
                 }
-                if status == 200 && range == nil {
-                    let mime = headers["Content-Type"] ?? "application/octet-stream"
-                    self.cacheStore(resolvedID, thumb, data, mime)
-                }
-                self.respond(task, status: status, headers: headers, data: data)
             } catch {
                 guard let self, self.running.removeValue(forKey: key) != nil else { return }
                 editorLog.error("res \(resolvedID, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")

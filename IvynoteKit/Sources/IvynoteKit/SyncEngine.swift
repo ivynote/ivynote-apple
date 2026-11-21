@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Observation
 
@@ -71,9 +72,13 @@ public final class SyncEngine {
     public private(set) var cursor: Int64 = 0
 
     public let device: String
+    /// Local synced attachment cache with access-based LRU eviction.
+    public let attachmentCache: AttachmentStore
 
     /// Called when the server answers 401: the session is over.
     @ObservationIgnored public var onUnauthorized: (() -> Void)?
+    /// Called right after a queued `local-` attachment uploads and is promoted into cache.
+    @ObservationIgnored public var onResourceNormalized: ((_ localID: String, _ attachment: Attachment) -> Void)?
 
     @ObservationIgnored var outbox: [String: OutboxEntry] = [:]
     @ObservationIgnored private let store: LocalStore
@@ -105,6 +110,7 @@ public final class SyncEngine {
 
     public init(store: LocalStore, transport: SyncTransport?, device: String,
                 debounce: Duration = .milliseconds(800), persistDelay: Duration = .milliseconds(300),
+                cacheSettings: AttachmentCacheSettings? = .shared,
                 now: @escaping () -> Millis = { Millis(Date().timeIntervalSince1970 * 1000) }) {
         self.store = store
         self.transport = transport
@@ -115,6 +121,7 @@ public final class SyncEngine {
         self.persistDelay = persistDelay
         filesDir = store.filesURL ?? FileManager.default.temporaryDirectory
             .appending(path: "ivy-uploads-\(UUID().uuidString)", directoryHint: .isDirectory)
+        attachmentCache = AttachmentStore(store: store, settings: cacheSettings, now: now)
     }
 
     /// Loads the local copy. The first `sync()` then downloads a snapshot.
@@ -132,6 +139,7 @@ public final class SyncEngine {
             e.blocked = nil
             outbox[e.key] = e
         }
+        try attachmentCache.load()
         cursor = store.meta("cursor") ?? 0
         state.lastSyncAt = store.meta("lastSyncAt") ?? 0
         for n in notes.values { observeClock(n.hlc) }
@@ -214,6 +222,7 @@ public final class SyncEngine {
         stopped = true
         syncTimer?.cancel()
         persistNow()
+        attachmentCache.stop()
     }
 
     // MARK: Pull (guide 6.5)
@@ -243,8 +252,14 @@ public final class SyncEngine {
         var put: [(id: String, value: Attachment)] = []
         var gone: [String] = []
         for a in res.attachments {
-            if a.deleted { attachments[a.id] = nil; gone.append(a.id) }
-            else { attachments[a.id] = a; put.append((a.id, a)) }
+            if a.deleted {
+                attachments[a.id] = nil
+                gone.append(a.id)
+                attachmentCache.remove(attachmentID: a.id)
+            } else {
+                attachments[a.id] = a
+                put.append((a.id, a))
+            }
         }
         try? store.put(.attachments, put)
         try? store.delete(.attachments, gone)
@@ -453,6 +468,7 @@ public final class SyncEngine {
     public func persistNow() {
         persistTimer?.cancel()
         persistTimer = nil
+        attachmentCache.persistNow()
         guard !dirty.isEmpty else { return }
         let d = dirty
         dirty = Dirty()
@@ -652,49 +668,62 @@ public final class SyncEngine {
 
     // MARK: Attachments (guide 7)
 
-    /// Uploads a file now; when the server cannot be reached (and only then)
-    /// keeps a copy under a `local-` id that the next sync uploads and
-    /// replaces in every body. A local library keeps its files that way.
+    /// Copies the file straight into the local attachment store under a `local-`
+    /// id so it renders immediately with zero network wait, then schedules a
+    /// background sync to upload it, promote it into the local cache, and
+    /// normalize note references to the server's id.
     public func addFile(_ data: Data, name: String, mime: String) async throws -> AddedFile {
-        let mime = mime.isEmpty ? "application/octet-stream" : mime
-        let name = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "file" : name
-        if let transport, !stopped {
-            do {
-                let att = try await transport.uploadFile(data, name: name, mime: mime)
-                putAttachment(att)
-                return AddedFile(id: att.id, name: att.name, kind: att.kind, local: false)
-            } catch let e as APIError {
-                guard case .unreachable = e else { throw e }
-            }
-        }
-        let up = try queueUpload(data, name: name, mime: mime)
-        if transport != nil {
-            state.status = .offline
-            scheduleSync(after: retryDelay)
-        }
-        return AddedFile(id: up.id, name: up.name, kind: up.kind, local: true)
+        try addFileLocal(data, name: name, mime: mime)
     }
 
-    private func queueUpload(_ data: Data, name: String, mime: String) throws -> PendingUpload {
+    /// Synchronous local-first file insert: stages into the local attachment
+    /// store and queues background upload when syncing is enabled.
+    public func addFileLocal(_ data: Data, name: String, mime: String) throws -> AddedFile {
+        let mime = mime.isEmpty ? "application/octet-stream" : mime
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "file" : name
+        let hash = Self.sha256Hex(data)
+        let up: PendingUpload
+        if let existing = uploads.values.first(where: {
+            $0.failed == nil && $0.sha256 == hash && FileManager.default.fileExists(atPath: filesDir.appending(path: $0.file).path)
+        }) {
+            up = existing
+        } else {
+            up = try queueUpload(data, name: name, mime: mime, sha256: hash)
+        }
+        if transport != nil && !stopped {
+            scheduleSync(after: min(debounce, .milliseconds(250)))
+        }
+        return AddedFile(id: up.id, name: name, kind: up.kind, local: true)
+    }
+
+    private func queueUpload(_ data: Data, name: String, mime: String, sha256: String) throws -> PendingUpload {
         var id = PendingUpload.prefix + newEntityID()
         while uploads[id] != nil { id = PendingUpload.prefix + newEntityID() }
         try FileManager.default.createDirectory(at: filesDir, withIntermediateDirectories: true)
         let file = id
         try data.write(to: filesDir.appending(path: file), options: [.atomic])
-        let up = PendingUpload(id: id, name: name, mime: mime, file: file, size: Int64(data.count), createdAt: now())
+        let up = PendingUpload(id: id, name: name, mime: mime, file: file, size: Int64(data.count), createdAt: now(), sha256: sha256)
         uploads[id] = up
         try store.put(.uploads, [(id: id, value: up)])
         updateCounts()
         return up
     }
 
-    /// Uploads queued files, oldest first, and points the notes that use
-    /// them at the server's ids (guide 7.2). Network errors, 5xx, 401, 408
-    /// and 429 end the round; any other refusal sets that file aside.
+    private static func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Uploads queued files in the background, oldest first, promotes each local
+    /// copy directly into the local attachment cache under the server's id (so
+    /// it never needs to be downloaded back), and normalizes note references.
+    /// Network errors, 5xx, 401, 408 and 429 end the round; any other refusal
+    /// sets that file aside.
     func flushUploads() async throws {
         guard let transport else { return }
-        for up in uploads.values.sorted(by: { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }) where up.failed == nil {
-            guard !stopped else { return }
+        while !stopped,
+              let up = uploads.values
+                .filter({ $0.failed == nil })
+                .min(by: { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }) {
             let file = filesDir.appending(path: up.file)
             let att: Attachment
             do {
@@ -710,11 +739,16 @@ public final class SyncEngine {
             }
             guard uploads[up.id] != nil else { continue }
             putAttachment(att)
+            // Move the local copy directly into the synced attachment cache under
+            // the canonical server id (with a runtime alias for `local-` id).
+            attachmentCache.promote(from: file, localID: up.id, to: att.id, mime: att.mime.isEmpty ? up.mime : att.mime)
             let old = "ivy://res/\(up.id)"
+            let replacement = "ivy://res/\(att.id)"
             for n in notes.values where n.body.contains(old) {
-                updateNote(n.id, .init(body: n.body.replacingOccurrences(of: old, with: "ivy://res/\(att.id)")))
+                updateNote(n.id, .init(body: n.body.replacingOccurrences(of: old, with: replacement)))
             }
-            // The bodies must reach the disk before the file leaves it.
+            onResourceNormalized?(up.id, att)
+            // The normalized bodies must reach the disk before the queue record leaves it.
             persistNow()
             uploads[up.id] = nil
             try? store.delete(.uploads, [up.id])
@@ -731,8 +765,29 @@ public final class SyncEngine {
 
     /// The copy of a queued file, to show it before it is uploaded.
     public func uploadFile(_ id: String) -> (url: URL, mime: String)? {
-        guard let up = uploads[id] else { return nil }
-        return (filesDir.appending(path: up.file), up.mime)
+        if let up = uploads[id] {
+            let url = filesDir.appending(path: up.file)
+            if FileManager.default.fileExists(atPath: url.path) {
+                return (url, up.mime)
+            }
+        }
+        // Recently promoted from pending upload to synced cache: follow the alias.
+        if attachmentCache.canonicalID(id) != id {
+            return attachmentCache.cachedFile(id: id, thumb: false)
+        }
+        return nil
+    }
+
+    /// Local-first lookup for any attachment: checks pending local uploads first,
+    /// then the synced local attachment cache (following promoted aliases).
+    public func localAttachment(_ id: String, thumb: Bool = false) -> (url: URL, mime: String)? {
+        if let up = uploads[id] {
+            let url = filesDir.appending(path: up.file)
+            if FileManager.default.fileExists(atPath: url.path) {
+                return (url, up.mime)
+            }
+        }
+        return attachmentCache.cachedFile(id: id, thumb: thumb)
     }
 
     /// Records an attachment's metadata, e.g. after an upload or a change
@@ -744,13 +799,14 @@ public final class SyncEngine {
     }
 
     public func removeAttachment(_ id: String) {
+        attachmentCache.remove(attachmentID: id)
         guard attachments.removeValue(forKey: id) != nil else { return }
         try? store.delete(.attachments, [id])
     }
 
     /// `image`, `video`, `audio` or `file`, for uploaded and queued files.
     public func attachmentKind(_ id: String) -> String? {
-        attachments[id]?.kind ?? uploads[id]?.kind
+        attachments[attachmentCache.canonicalID(id)]?.kind ?? uploads[id]?.kind
     }
 
     /// Sends refused files again, e.g. after the user freed some space.

@@ -3,7 +3,7 @@
 //
 // Swift → JS: window.ivy.load / setBody / setTitles / setKinds / setKind /
 //             setTheme / setLanguage / setReadonly / focus / command / scrollToLine /
-//             insert / setBacklinks / render
+//             insert / insertAttachment / normalizeResource / setBacklinks / render
 // JS → Swift: webkit.messageHandlers.ivy.postMessage({ type, ... })
 //   ready              the page can take a document
 //   change {id, body}  the user edited the note
@@ -74,6 +74,8 @@ let byTitle = new Map<string, string>();
 let kinds: Record<string, string> = {};
 let lastEmitted = '';
 let view: EditorView | null = null;
+let userPlacedCursor = false;
+let pendingNormalizations: Array<{ localId: string; remoteId: string }> = [];
 const roConf = new Compartment();
 const placeholderConf = new Compartment();
 
@@ -83,11 +85,13 @@ const placeholderConf = new Compartment();
 const words = {
 	zh: {
 		placeholder: '开始写作…', bold: '加粗', italic: '斜体', strike: '删除线', untitled: '无标题',
-		backlinks: '反向链接', backlinkCount: (n: number) => `${n} 条反向链接`
+		backlinks: '反向链接', backlinkCount: (n: number) => `${n} 条反向链接`,
+		loadingImage: '图片加载中…', brokenImage: '图片无法显示'
 	},
 	en: {
 		placeholder: 'Start writing…', bold: 'bold', italic: 'italic', strike: 'strikethrough', untitled: 'Untitled',
-		backlinks: 'Backlinks', backlinkCount: (n: number) => `${n} ${n === 1 ? 'backlink' : 'backlinks'}`
+		backlinks: 'Backlinks', backlinkCount: (n: number) => `${n} ${n === 1 ? 'backlink' : 'backlinks'}`,
+		loadingImage: 'Loading image…', brokenImage: 'Image unavailable'
 	}
 };
 let lang: keyof typeof words = 'zh';
@@ -170,13 +174,26 @@ function extensions(readonly: boolean) {
 				if (!files.length || readOnlyNow()) return false;
 				e.preventDefault();
 				const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
-				if (pos != null) v.dispatch({ selection: { anchor: pos } });
+				if (pos != null) {
+					userPlacedCursor = true;
+					v.dispatch({ selection: { anchor: pos } });
+				}
 				void sendFiles(files);
 				return true;
+			},
+			compositionend() {
+				if (pendingNormalizations.length) queueMicrotask(flushPendingNormalizations);
+				return false;
 			}
 		}),
 		EditorView.updateListener.of((u) => {
 			if (u.focusChanged) post({ type: 'focus', focused: u.view.hasFocus });
+			if (u.selectionSet && !u.transactions.every((tr) => tr.annotation(Transaction.remote))) {
+				userPlacedCursor = true;
+			}
+			if (pendingNormalizations.length && !u.view.compositionStarted) {
+				queueMicrotask(flushPendingNormalizations);
+			}
 			if (!u.docChanged) return;
 			// Text put in from outside (sync, another device) is not sent back.
 			if (u.transactions.every((tr) => tr.annotation(Transaction.remote))) return;
@@ -190,6 +207,154 @@ function extensions(readonly: boolean) {
 
 const host = document.getElementById('editor')!;
 let loadReadonly = false;
+
+// --- Image loading placeholders: subtle shimmer while fetching remote bytes,
+// zero flash for instant local/cached images. ---
+
+const wiredImages = new WeakSet<HTMLImageElement>();
+
+function wireMediaImage(img: HTMLImageElement) {
+	if (wiredImages.has(img)) return;
+	wiredImages.add(img);
+	const wrap = img.closest('.cm-media') as HTMLElement | null;
+	if (!wrap) return;
+	const label = img.alt || w().loadingImage;
+
+	const finishLoaded = () => {
+		if (timer != null) {
+			window.clearTimeout(timer);
+			timer = null;
+		}
+		wrap.classList.remove('cm-media-loading', 'cm-media-broken');
+		wrap.classList.add('cm-media-loaded');
+		wrap.querySelector('.cm-media-placeholder')?.remove();
+	};
+
+	const finishBroken = () => {
+		if (timer != null) {
+			window.clearTimeout(timer);
+			timer = null;
+		}
+		wrap.classList.remove('cm-media-loading');
+		wrap.classList.add('cm-media-broken');
+		wrap.dataset.alt = img.alt || w().brokenImage;
+		wrap.querySelector('.cm-media-placeholder')?.remove();
+	};
+
+	let timer: number | null = null;
+	if (img.complete) {
+		if (img.naturalWidth > 0) finishLoaded();
+		else finishBroken();
+		return;
+	}
+
+	// Local/cached images finish in a few milliseconds; delay the skeleton
+	// slightly so cached swaps never flicker.
+	timer = window.setTimeout(() => {
+		timer = null;
+		if (img.complete) {
+			if (img.naturalWidth > 0) finishLoaded();
+			else finishBroken();
+			return;
+		}
+		wrap.classList.add('cm-media-loading');
+		if (!wrap.querySelector('.cm-media-placeholder')) {
+			const ph = document.createElement('span');
+			ph.className = 'cm-media-placeholder';
+			ph.setAttribute('aria-hidden', 'true');
+			ph.innerHTML =
+				'<span class="cm-media-placeholder-icon">' +
+				'<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
+				'<rect x="3" y="4" width="18" height="16" rx="3"/>' +
+				'<circle cx="9" cy="10" r="1.5"/>' +
+				'<path d="m21 16-5-5-4 4-2-2-5 5"/>' +
+				'</svg></span>';
+			const text = document.createElement('span');
+			text.className = 'cm-media-placeholder-label';
+			text.textContent = label;
+			ph.appendChild(text);
+			wrap.appendChild(ph);
+		}
+	}, 50);
+
+	img.addEventListener('load', finishLoaded, { once: true });
+	img.addEventListener('error', finishBroken, { once: true });
+}
+
+function scanMediaImages(root: ParentNode) {
+	const imgs = root.querySelectorAll('.cm-media > img');
+	for (const node of imgs) wireMediaImage(node as HTMLImageElement);
+}
+
+const mediaObserver = new MutationObserver((mutations) => {
+	for (const m of mutations) {
+		for (const added of m.addedNodes) {
+			if (!(added instanceof HTMLElement)) continue;
+			if (added.tagName === 'IMG' && added.closest('.cm-media')) {
+				wireMediaImage(added as HTMLImageElement);
+			} else if (added.querySelectorAll) {
+				scanMediaImages(added);
+			}
+		}
+	}
+});
+mediaObserver.observe(host, { childList: true, subtree: true });
+
+/** Replaces `ivy://res/<localId>` with `ivy://res/<remoteId>` in the active
+ *  editor without stealing focus, moving the cursor or clobbering concurrent typing. */
+function applyResourceNormalization(localId: string, remoteId: string) {
+	if (!view) return;
+	const needle = `ivy://res/${localId}`;
+	const replacement = `ivy://res/${remoteId}`;
+	const doc = view.state.doc.toString();
+	if (!doc.includes(needle)) return;
+	const changes: Array<{ from: number; to: number; insert: string }> = [];
+	let idx = doc.indexOf(needle);
+	while (idx !== -1) {
+		changes.push({ from: idx, to: idx + needle.length, insert: replacement });
+		idx = doc.indexOf(needle, idx + needle.length);
+	}
+	if (!changes.length) return;
+	view.dispatch({
+		changes,
+		annotations: [Transaction.remote.of(true), Transaction.addToHistory.of(false)]
+	});
+	// Keep `lastEmitted` in sync; for an unlocked password-protected note, also
+	// re-seal and emit so the server receives the normalized server ID.
+	const updatedText = view.state.doc.toString();
+	if (protection.plain() !== null) {
+		const sealed = protection.edited(updatedText);
+		lastEmitted = sealed;
+		post({ type: 'change', id: noteId, body: sealed });
+	} else {
+		lastEmitted = updatedText;
+	}
+}
+
+function flushPendingNormalizations() {
+	if (!view || view.compositionStarted || !pendingNormalizations.length) return;
+	const items = pendingNormalizations;
+	pendingNormalizations = [];
+	for (const item of items) applyResourceNormalization(item.localId, item.remoteId);
+}
+
+function preloadImage(src: string, timeoutMs = 80): Promise<void> {
+	return new Promise((resolve) => {
+		const img = new Image();
+		let done = false;
+		const finish = () => {
+			if (done) return;
+			done = true;
+			window.clearTimeout(timer);
+			resolve();
+		};
+		const timer = window.setTimeout(finish, timeoutMs);
+		img.onload = finish;
+		img.onerror = finish;
+		img.src = src;
+		if (img.complete) finish();
+	});
+}
 
 /** Puts text that changed elsewhere into the editor with the minimal diff,
  *  so the cursor stays where it is. */
@@ -321,10 +486,13 @@ window.ivy = {
 		noteId = p.id;
 		lastEmitted = p.body;
 		loadReadonly = !!p.readonly;
+		userPlacedCursor = false;
+		pendingNormalizations = [];
 		if (p.fontSize) document.documentElement.style.setProperty('--editor-size', `${p.fontSize}px`);
 		renderBacklinks([]);
 		// The editor, or the lock panel of a protected note.
 		protection.load(p.body);
+		scanMediaImages(host);
 		document.scrollingElement?.scrollTo(0, 0);
 		lastTop = -1;
 		reportTop();
@@ -366,6 +534,56 @@ window.ivy = {
 		insertText(view, text, block);
 	},
 
+	/** Inserts attachment Markdown at the latest cursor position (or the end of
+	 *  the note if the user has not placed a cursor yet), without forcing edit
+	 *  mode or jumping to the start of the document. */
+	insertAttachment(text: string) {
+		if (!view || view.state.readOnly) return;
+		const { state } = view;
+		const wasFocused = view.hasFocus;
+		const r = !userPlacedCursor && state.doc.length > 0
+			? { from: state.doc.length, to: state.doc.length }
+			: state.selection.main;
+		let insert = text;
+		const line = state.doc.lineAt(r.from);
+		if (r.from > line.from) insert = '\n' + insert;
+		const hasFollowingNewline = r.to < state.doc.length && state.sliceDoc(r.to, r.to + 1) === '\n';
+		let nextAnchor: number;
+		if (hasFollowingNewline) {
+			nextAnchor = r.from + insert.length + 1;
+		} else {
+			insert += '\n';
+			nextAnchor = r.from + insert.length;
+		}
+		userPlacedCursor = true;
+		view.dispatch({
+			changes: { from: r.from, to: r.to, insert },
+			selection: { anchor: nextAnchor },
+			scrollIntoView: true,
+			userEvent: 'input'
+		});
+		if (wasFocused) view.focus();
+	},
+
+	/** Normalizes `ivy://res/<localId>` -> `ivy://res/<remoteId>` after a
+	 *  background upload completes, keeping cursor, scroll and focus untouched. */
+	normalizeResource(localId: string, remoteId: string, kind: string) {
+		if (kind) kinds[remoteId] = kind;
+		const apply = () => {
+			if (!view) return;
+			if (view.compositionStarted) {
+				pendingNormalizations.push({ localId, remoteId });
+				return;
+			}
+			applyResourceNormalization(localId, remoteId);
+		};
+		if (kind === 'image') {
+			void preloadImage(resource(remoteId)).then(apply);
+		} else {
+			apply();
+		}
+	},
+
 	setBacklinks(list: Backlink[]) {
 		backlinks = list;
 		renderBacklinks(list);
@@ -401,6 +619,7 @@ window.ivy = {
 
 	focus(atEnd = false) {
 		if (!view) return;
+		userPlacedCursor = true;
 		view.focus();
 		if (atEnd) view.dispatch({ selection: { anchor: view.state.doc.length }, scrollIntoView: true });
 	},
@@ -409,6 +628,7 @@ window.ivy = {
 	scrollToLine(line: number, focus = false) {
 		if (!view) return;
 		const l = view.state.doc.line(Math.min(Math.max(1, line + 1), view.state.doc.lines));
+		if (focus) userPlacedCursor = true;
 		view.dispatch({ selection: { anchor: l.from }, effects: EditorView.scrollIntoView(l.from, { y: 'start', yMargin: 24 }) });
 		if (focus) view.focus();
 	},

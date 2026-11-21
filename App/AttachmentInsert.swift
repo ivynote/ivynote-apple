@@ -3,14 +3,15 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Adds files to the open note (guide 7.1): uploads each one, or queues it
-/// when offline, and writes its reference into the body on a line of its own.
+/// Adds files to the open note (guide 7.1): copies each one into the local
+/// attachment library right away, inserts its reference without waiting for
+/// the network, and lets `SyncEngine` upload and normalize links in the background.
 @MainActor
 @Observable
 final class AttachmentInserter {
-    /// Files being uploaded, for the spinner beside the title.
+    /// Files being staged locally, for the spinner beside the title.
     private(set) var busy = 0
-    /// The last message worth showing (queued offline, refused).
+    /// The last message worth showing (offline queued, error).
     var notice: String?
 
     struct File {
@@ -22,28 +23,31 @@ final class AttachmentInserter {
     func add(_ files: [File], to noteID: String, engine: SyncEngine, host: EditorHost) {
         guard !files.isEmpty else { return }
         busy += files.count
-        Task {
-            // One after another, so they land in the order they were picked.
-            for f in files {
-                defer { busy -= 1 }
-                do {
-                    let added = try await engine.addFile(f.data, name: f.name, mime: f.mime)
-                    place(added, in: noteID, engine: engine, host: host)
-                    if added.local && !engine.isLocal { notice = L10n.s.savedLocally(added.name) }
-                } catch {
-                    notice = L10n.s.uploadFailed(f.name, error.localizedDescription)
-                }
+        defer { busy -= files.count }
+        var staged: [AddedFile] = []
+        for f in files {
+            do {
+                let added = try engine.addFileLocal(f.data, name: f.name, mime: f.mime)
+                staged.append(added)
+            } catch {
+                notice = L10n.s.uploadFailed(f.name, error.localizedDescription)
             }
+        }
+        guard !staged.isEmpty else { return }
+        place(staged, in: noteID, engine: engine, host: host)
+        if engine.state.status == .offline && !engine.isLocal {
+            notice = staged.count == 1 ? L10n.s.savedLocally(staged[0].name) : L10n.s.savedLocallyUploadLater
         }
     }
 
-    /// At the cursor if the note is still open; otherwise at its end.
-    private func place(_ file: AddedFile, in noteID: String, engine: SyncEngine, host: EditorHost) {
+    /// At the latest cursor position if the note is still open; otherwise at its end.
+    private func place(_ files: [AddedFile], in noteID: String, engine: SyncEngine, host: EditorHost) {
         if host.noteID == noteID {
-            host.insertFile(file)
+            host.insertFiles(files)
         } else if let note = engine.notes[noteID] {
             let sep = note.body.isEmpty || note.body.hasSuffix("\n") ? "" : "\n"
-            engine.updateNote(noteID, .init(body: note.body + sep + file.markdown + "\n"))
+            let block = files.map(\.markdown).joined(separator: "\n") + "\n"
+            engine.updateNote(noteID, .init(body: note.body + sep + block))
         }
     }
 

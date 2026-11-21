@@ -31,7 +31,7 @@ struct NoteEditorView: View {
                     .padding(12)
                     .background(.orange.opacity(0.12))
                 }
-                NoteMetaBar(note: note, uploading: inserter.busy)
+                NoteMetaBar(note: note, uploading: activeUploads)
                 MarkdownEditor(host: host)
             }
             // The page's --surface, so the title and the body are one sheet.
@@ -128,6 +128,13 @@ struct NoteEditorView: View {
             .onChange(of: colorScheme) { _, scheme in host.setTheme(dark: scheme == .dark) }
             .onChange(of: LanguageSettings.shared.current) { _, language in host.setLanguage(language) }
         }
+    }
+
+    private var activeUploads: Int {
+        let queued = engine.isLocal || engine.state.status == .offline
+            ? 0
+            : engine.uploads.values.filter { $0.failed == nil }.count
+        return inserter.busy + queued
     }
 
     private func add(_ files: [AttachmentInserter.File]) {

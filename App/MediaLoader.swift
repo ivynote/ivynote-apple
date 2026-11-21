@@ -36,11 +36,19 @@ final class MediaLoader {
     }
 
     func data(_ id: String, thumb: Bool = false) async throws -> Data {
-        if let local = engine?.uploadFile(id) { return try Data(contentsOf: local.url) }
+        if let local = engine?.localAttachment(id, thumb: thumb) {
+            return try Data(contentsOf: local.url)
+        }
+        let resolvedID = engine?.attachmentCache.canonicalID(id) ?? id
         guard let api else { throw APIError.unreachable(L10n.s.localNoServer) }
-        let (data, response) = try await EditorSchemeHandler.mediaSession.data(for: api.rawRequest(id, thumb: thumb))
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+        let (data, response) = try await EditorSchemeHandler.mediaSession.data(for: api.rawRequest(resolvedID, thumb: thumb))
+        let http = response as? HTTPURLResponse
+        if let http, !(200..<300).contains(http.statusCode) {
             throw APIError.server(status: http.statusCode, message: "")
+        }
+        if http == nil || http?.statusCode == 200 {
+            let mime = http?.value(forHTTPHeaderField: "Content-Type") ?? engine?.attachments[resolvedID]?.mime ?? "application/octet-stream"
+            _ = engine?.attachmentCache.store(id: resolvedID, thumb: thumb, data: data, mime: mime)
         }
         return data
     }

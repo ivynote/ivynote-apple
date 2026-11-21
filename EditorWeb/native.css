@@ -93,3 +93,84 @@ body {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+
+/* Image loading placeholder & broken state */
+.ivy-editor .cm-media {
+	position: relative;
+}
+.ivy-editor .cm-media.cm-media-loading {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: min(100%, 260px);
+	min-height: 160px;
+	border-radius: 16px;
+	overflow: hidden;
+	background: rgb(var(--sunken));
+}
+.ivy-editor .cm-media.cm-media-loading img {
+	position: absolute;
+	inset: 0;
+	opacity: 0;
+	pointer-events: none;
+}
+.ivy-editor .cm-media-placeholder {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	width: 100%;
+	height: 100%;
+	padding: 20px 16px;
+	color: rgb(var(--muted));
+	font-size: 12px;
+	background: linear-gradient(
+		90deg,
+		rgb(var(--sunken)) 0%,
+		rgb(var(--line) / 0.45) 50%,
+		rgb(var(--sunken)) 100%
+	);
+	background-size: 200% 100%;
+	animation: ivy-media-shimmer 1.4s ease-in-out infinite;
+}
+.ivy-editor .cm-media-placeholder-icon {
+	display: inline-flex;
+	opacity: 0.7;
+}
+.ivy-editor .cm-media-placeholder-label {
+	max-width: 220px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	opacity: 0.85;
+}
+.ivy-editor .cm-media.cm-media-loaded img {
+	opacity: 1;
+	transition: opacity 0.16s ease-out;
+}
+.ivy-editor .cm-media.cm-media-broken {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 180px;
+	min-height: 110px;
+	padding: 12px 16px;
+	color: rgb(var(--muted));
+	font-size: 12px;
+}
+.ivy-editor .cm-media.cm-media-broken::after {
+	content: attr(data-alt);
+	max-width: 220px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+@keyframes ivy-media-shimmer {
+	0% {
+		background-position: 200% 0;
+	}
+	100% {
+		background-position: -200% 0;
+	}
+}

@@ -83,7 +83,7 @@ struct ShareView: View {
 
     private var linkSection: some View {
         Section {
-            Toggle(isOn: Binding(get: { live || enabling }, set: toggle)) {
+            Toggle(isOn: Binding(get: { live || enabling }, set: { toggle($0) })) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(L.publicLink)
                     Text(L.publicLinkHint).font(.footnote).foregroundStyle(.secondary)

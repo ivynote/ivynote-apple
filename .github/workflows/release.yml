@@ -1,0 +1,557 @@
+# Build macOS (Universal DMG) and iOS (IPA) packages; on a vX.Y.Z tag also
+# publish a GitHub Release.
+#
+#   git tag v0.2.0 && git push origin v0.2.0
+#
+# The tag is the only input: the app version comes from it, the release notes
+# are generated from the PRs merged since the previous tag, and the release is
+# published only after all unit tests and both platform builds pass verification.
+# Tags with a suffix (v0.2.0-beta.1) become pre-releases.
+#
+# Pull requests touching packaging and manual runs (without a tag input) build
+# the packages as workflow artifacts without releasing anything.
+#
+# Optional signing & notarization secrets (falls back to ad-hoc macOS / unsigned
+# iOS builds when omitted):
+#   APPLE_TEAM_ID
+#   MACOS_SIGN_P12_BASE64, MACOS_SIGN_P12_PASSWORD
+#   APPLE_NOTARY_KEY_BASE64, APPLE_NOTARY_KEY_ID, APPLE_NOTARY_ISSUER_ID
+#   IOS_SIGN_P12_BASE64, IOS_SIGN_P12_PASSWORD, IOS_PROVISION_PROFILE_BASE64
+#   IOS_EXPORT_METHOD (optional variable, default: release-testing)
+#   SITE_ADMIN_TOKEN (optional: immediately refresh ivynote.net / ivynote.app)
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "packaging/**"
+      - "project.yml"
+      - "Config.xcconfig"
+      - "Makefile"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build and publish (e.g. v0.2.0); leave empty for a dry-run artifact build"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  meta:
+    name: Resolve version
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      ref: ${{ steps.v.outputs.ref }}
+      version: ${{ steps.v.outputs.version }}
+      numeric: ${{ steps.v.outputs.numeric }}
+      build_number: ${{ steps.v.outputs.build_number }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: v
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="$GITHUB_REF_NAME"
+            ref=""
+            release=true
+          elif [[ -n "$INPUT_TAG" ]]; then
+            tag="$INPUT_TAG"
+            if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+              echo "::error::tag $tag is not vMAJOR.MINOR.PATCH[-suffix]"; exit 1
+            fi
+            git fetch --no-tags --depth=1 origin "refs/tags/$tag:refs/tags/$tag" \
+              || { echo "::error::tag $tag does not exist on origin"; exit 1; }
+            ref="refs/tags/$tag"
+            release=true
+          else
+            tag=""
+            ref=""
+            release=false
+          fi
+
+          if [[ "$release" == true ]]; then
+            version="${tag#v}"
+            if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+              echo "::error::tag $tag is not vMAJOR.MINOR.PATCH[-suffix]"; exit 1
+            fi
+            numeric="${version%%-*}"
+            IFS=. read -r major minor patch <<< "$numeric"
+            build_number=$((10#$major * 1000000 + 10#$minor * 1000 + 10#$patch))
+            [[ "$build_number" -eq 0 ]] && build_number=1
+          else
+            base=$(sed -nE 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*"?([0-9]+\.[0-9]+\.[0-9]+)"?.*/\1/p' project.yml | head -n 1)
+            base=${base:-0.1.0}
+            version="${base}-dev.${GITHUB_SHA::7}"
+            numeric="$base"
+            build_number="${GITHUB_RUN_NUMBER:-1}"
+          fi
+
+          [[ "$version" == *-* ]] && prerelease=true || prerelease=false
+
+          {
+            echo "tag=$tag"
+            echo "ref=$ref"
+            echo "version=$version"
+            echo "numeric=$numeric"
+            echo "build_number=$build_number"
+            echo "prerelease=$prerelease"
+            echo "release=$release"
+          } >> "$GITHUB_OUTPUT"
+          echo "version=$version numeric=$numeric build=$build_number release=$release prerelease=$prerelease ref=$ref"
+
+  test:
+    name: Test IvynoteKit
+    needs: meta
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.meta.outputs.ref }}
+
+      - name: Check bundled editor assets
+        run: |
+          for f in App/Editor/index.html App/Editor/main.js App/Editor/editor.css; do
+            test -s "$f" || { echo "::error::Missing or empty $f"; exit 1; }
+          done
+          test -d App/Editor/chunks || { echo "::error::Missing App/Editor/chunks"; exit 1; }
+
+      - name: Prepare test keychain
+        run: |
+          KC="$RUNNER_TEMP/release-tests.keychain-db"
+          security create-keychain -p ci-test "$KC"
+          security set-keychain-settings "$KC"
+          security unlock-keychain -p ci-test "$KC"
+          if [ -f "$HOME/Library/Keychains/login.keychain-db" ]; then
+            security list-keychains -d user -s "$KC" "$HOME/Library/Keychains/login.keychain-db"
+          else
+            security list-keychains -d user -s "$KC"
+          fi
+          security default-keychain -s "$KC"
+          echo "CI_TEST_KEYCHAIN=$KC" >> "$GITHUB_ENV"
+
+      - name: Run IvynoteKit unit tests
+        working-directory: IvynoteKit
+        run: swift test
+
+      - name: Clean up test keychain
+        if: always() && env.CI_TEST_KEYCHAIN != ''
+        run: security delete-keychain "$CI_TEST_KEYCHAIN" || true
+
+  macos:
+    name: macOS (Universal DMG)
+    needs: meta
+    runs-on: macos-26
+    timeout-minutes: 45
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+      notarized: ${{ steps.notarize.outputs.notarized }}
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      NUMERIC: ${{ needs.meta.outputs.numeric }}
+      BUILD_NUMBER: ${{ needs.meta.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.meta.outputs.ref }}
+
+      - name: Install XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen || brew install xcodegen
+          xcodegen --version
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Configure signing
+        id: sign
+        env:
+          P12_BASE64: ${{ secrets.MACOS_SIGN_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.MACOS_SIGN_P12_PASSWORD }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [[ -n "$P12_BASE64" ]]; then
+            [[ -n "$TEAM_ID" ]] || { echo "::error::APPLE_TEAM_ID must be set with MACOS_SIGN_P12_BASE64"; exit 1; }
+            KC="$RUNNER_TEMP/macos-sign.keychain-db"
+            KC_PASS=$(openssl rand -base64 24)
+            P12_FILE="$RUNNER_TEMP/macos-cert.p12"
+
+            echo "$P12_BASE64" | base64 --decode > "$P12_FILE"
+            security create-keychain -p "$KC_PASS" "$KC"
+            security set-keychain-settings -lut 21600 "$KC"
+            security unlock-keychain -p "$KC_PASS" "$KC"
+            security import "$P12_FILE" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS" "$KC"
+            if [ -f "$HOME/Library/Keychains/login.keychain-db" ]; then
+              security list-keychains -d user -s "$KC" "$HOME/Library/Keychains/login.keychain-db"
+            else
+              security list-keychains -d user -s "$KC"
+            fi
+            rm -f "$P12_FILE"
+
+            IDENTITY=$(security find-identity -v -p codesigning "$KC" \
+              | sed -nE 's/.*"((Developer ID Application|Apple Distribution|Apple Development):[^"]+)".*/\1/p' \
+              | head -n 1)
+            [[ -n "$IDENTITY" ]] || { echo "::error::No macOS signing identity found in MACOS_SIGN_P12_BASE64"; exit 1; }
+
+            echo "SIGN_KEYCHAIN=$KC" >> "$GITHUB_ENV"
+            echo "SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+            echo "SIGN_TEAM_ID=$TEAM_ID" >> "$GITHUB_ENV"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Signing macOS build with identity: $IDENTITY"
+          else
+            echo "::warning::MACOS_SIGN_P12_BASE64 is not set: building ad-hoc signed macOS package"
+            echo "SIGN_IDENTITY=-" >> "$GITHUB_ENV"
+            echo "SIGN_TEAM_ID=" >> "$GITHUB_ENV"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Archive macOS (Universal arm64 + x86_64)
+        run: |
+          extra_args=()
+          if [[ "${{ steps.sign.outputs.signed }}" == "true" ]]; then
+            extra_args+=(OTHER_CODE_SIGN_FLAGS="--timestamp --options=runtime")
+          fi
+          xcodebuild archive \
+            -project Ivynote.xcodeproj \
+            -scheme Ivynote \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -archivePath build/Ivynote-macos.xcarchive \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
+            MARKETING_VERSION="$NUMERIC" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="$SIGN_IDENTITY" \
+            DEVELOPMENT_TEAM="$SIGN_TEAM_ID" \
+            "${extra_args[@]}"
+
+      - name: Package DMG
+        run: |
+          APP="build/Ivynote-macos.xcarchive/Products/Applications/Ivynote.app"
+          DMG="dist/Ivynote-${VERSION}-macos-universal.dmg"
+          bash packaging/create-dmg.sh "$APP" "$DMG" "Ivynote"
+          if [[ "${{ steps.sign.outputs.signed }}" == "true" ]]; then
+            codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
+          fi
+
+      - name: Notarize DMG (optional)
+        id: notarize
+        env:
+          NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          DMG="dist/Ivynote-${VERSION}-macos-universal.dmg"
+          if [[ "${{ steps.sign.outputs.signed }}" == "true" && -n "$NOTARY_KEY_BASE64" && -n "$NOTARY_KEY_ID" && -n "$NOTARY_ISSUER_ID" ]]; then
+            KEY_FILE="$RUNNER_TEMP/notary-key.p8"
+            echo "$NOTARY_KEY_BASE64" | base64 --decode > "$KEY_FILE"
+            echo "NOTARY_KEY_FILE=$KEY_FILE" >> "$GITHUB_ENV"
+
+            xcrun notarytool submit "$DMG" \
+              --key "$KEY_FILE" \
+              --key-id "$NOTARY_KEY_ID" \
+              --issuer "$NOTARY_ISSUER_ID" \
+              --wait
+            xcrun stapler staple "$DMG"
+            rm -f "$KEY_FILE"
+            echo "notarized=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "notarized=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify macOS bundle & DMG
+        run: |
+          bash packaging/verify-bundle.sh \
+            --macos "build/Ivynote-macos.xcarchive/Products/Applications/Ivynote.app" \
+            --universal \
+            --version "$NUMERIC" \
+            --build "$BUILD_NUMBER" \
+            --dmg "dist/Ivynote-${VERSION}-macos-universal.dmg" \
+            --notarized "${{ steps.notarize.outputs.notarized }}"
+
+      - name: Clean up signing secrets
+        if: always()
+        run: |
+          [[ -n "${SIGN_KEYCHAIN:-}" ]] && security delete-keychain "$SIGN_KEYCHAIN" || true
+          [[ -n "${NOTARY_KEY_FILE:-}" ]] && rm -f "$NOTARY_KEY_FILE" || true
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: macos
+          path: dist/*
+          if-no-files-found: error
+
+  ios:
+    name: iOS (IPA)
+    needs: meta
+    runs-on: macos-26
+    timeout-minutes: 45
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      NUMERIC: ${{ needs.meta.outputs.numeric }}
+      BUILD_NUMBER: ${{ needs.meta.outputs.build_number }}
+      EXPORT_METHOD: ${{ vars.IOS_EXPORT_METHOD || 'release-testing' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.meta.outputs.ref }}
+
+      - name: Install XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen || brew install xcodegen
+          xcodegen --version
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Configure iOS signing
+        id: sign
+        env:
+          P12_BASE64: ${{ secrets.IOS_SIGN_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.IOS_SIGN_P12_PASSWORD }}
+          PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [[ -n "$P12_BASE64" && -n "$PROFILE_BASE64" ]]; then
+            KC="$RUNNER_TEMP/ios-sign.keychain-db"
+            KC_PASS=$(openssl rand -base64 24)
+            P12_FILE="$RUNNER_TEMP/ios-cert.p12"
+            PROFILE_TMP="$RUNNER_TEMP/ios.mobileprovision"
+            PROFILE_PLIST="$RUNNER_TEMP/ios-profile.plist"
+
+            echo "$P12_BASE64" | base64 --decode > "$P12_FILE"
+            security create-keychain -p "$KC_PASS" "$KC"
+            security set-keychain-settings -lut 21600 "$KC"
+            security unlock-keychain -p "$KC_PASS" "$KC"
+            security import "$P12_FILE" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS" "$KC"
+            if [ -f "$HOME/Library/Keychains/login.keychain-db" ]; then
+              security list-keychains -d user -s "$KC" "$HOME/Library/Keychains/login.keychain-db"
+            else
+              security list-keychains -d user -s "$KC"
+            fi
+            rm -f "$P12_FILE"
+
+            echo "$PROFILE_BASE64" | base64 --decode > "$PROFILE_TMP"
+            security cms -D -i "$PROFILE_TMP" > "$PROFILE_PLIST"
+            PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" "$PROFILE_PLIST")
+            PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$PROFILE_PLIST")
+            if [[ -z "$TEAM_ID" ]]; then
+              TEAM_ID=$(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" "$PROFILE_PLIST")
+            fi
+            rm -f "$PROFILE_PLIST"
+
+            PROFILE_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+            mkdir -p "$PROFILE_DIR"
+            INSTALLED_PROFILE="$PROFILE_DIR/${PROFILE_UUID}.mobileprovision"
+            mv "$PROFILE_TMP" "$INSTALLED_PROFILE"
+
+            IDENTITY=$(security find-identity -v -p codesigning "$KC" \
+              | sed -nE 's/.*"((Apple Distribution|iPhone Distribution|Apple Development|iPhone Developer):[^"]+)".*/\1/p' \
+              | head -n 1)
+            [[ -n "$IDENTITY" ]] || { echo "::error::No iOS signing identity found in IOS_SIGN_P12_BASE64"; exit 1; }
+
+            {
+              echo "SIGN_KEYCHAIN=$KC"
+              echo "SIGN_IDENTITY=$IDENTITY"
+              echo "SIGN_TEAM_ID=$TEAM_ID"
+              echo "PROFILE_NAME=$PROFILE_NAME"
+              echo "INSTALLED_PROFILE=$INSTALLED_PROFILE"
+            } >> "$GITHUB_ENV"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Signing iOS build with identity: $IDENTITY (profile: $PROFILE_NAME)"
+          else
+            echo "::warning::IOS_SIGN_P12_BASE64 / IOS_PROVISION_PROFILE_BASE64 not set: building unsigned iOS IPA"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Archive & package iOS (IPA)
+        run: |
+          mkdir -p dist
+          OUT_IPA="dist/Ivynote-${VERSION}-ios.ipa"
+
+          if [[ "${{ steps.sign.outputs.signed }}" == "true" ]]; then
+            xcodebuild archive \
+              -project Ivynote.xcodeproj \
+              -scheme Ivynote \
+              -configuration Release \
+              -destination 'generic/platform=iOS' \
+              -archivePath build/Ivynote-ios.xcarchive \
+              MARKETING_VERSION="$NUMERIC" \
+              CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+              CODE_SIGN_STYLE=Manual \
+              CODE_SIGN_IDENTITY="$SIGN_IDENTITY" \
+              DEVELOPMENT_TEAM="$SIGN_TEAM_ID" \
+              PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME"
+
+            cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>${EXPORT_METHOD}</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>teamID</key>
+            <string>${SIGN_TEAM_ID}</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>app.ivynote</key>
+              <string>${PROFILE_NAME}</string>
+            </dict>
+          </dict>
+          </plist>
+          EOF
+
+            xcodebuild -exportArchive \
+              -archivePath build/Ivynote-ios.xcarchive \
+              -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+              -exportPath build/ios-export
+
+            EXPORTED_IPA=$(find build/ios-export -maxdepth 1 -name '*.ipa' | head -n 1)
+            [[ -s "$EXPORTED_IPA" ]] || { echo "::error::No .ipa produced by exportArchive"; exit 1; }
+            cp "$EXPORTED_IPA" "$OUT_IPA"
+          else
+            xcodebuild archive \
+              -project Ivynote.xcodeproj \
+              -scheme Ivynote \
+              -configuration Release \
+              -destination 'generic/platform=iOS' \
+              -archivePath build/Ivynote-ios.xcarchive \
+              MARKETING_VERSION="$NUMERIC" \
+              CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_STYLE=Manual \
+              CODE_SIGN_IDENTITY="" \
+              DEVELOPMENT_TEAM=""
+
+            mkdir -p build/ipa/Payload
+            ditto "build/Ivynote-ios.xcarchive/Products/Applications/Ivynote.app" "build/ipa/Payload/Ivynote.app"
+            (cd build/ipa && zip -qry "../../$OUT_IPA" Payload)
+          fi
+
+      - name: Verify iOS IPA
+        run: |
+          bash packaging/verify-bundle.sh \
+            --ios "dist/Ivynote-${VERSION}-ios.ipa" \
+            --version "$NUMERIC" \
+            --build "$BUILD_NUMBER" \
+            --signed "${{ steps.sign.outputs.signed }}"
+
+      - name: Clean up signing secrets
+        if: always()
+        run: |
+          [[ -n "${SIGN_KEYCHAIN:-}" ]] && security delete-keychain "$SIGN_KEYCHAIN" || true
+          [[ -n "${INSTALLED_PROFILE:-}" ]] && rm -f "$INSTALLED_PROFILE" || true
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ios
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [meta, test, macos, ios]
+    if: needs.meta.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.meta.outputs.tag }}
+      VERSION: ${{ needs.meta.outputs.version }}
+      PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+      MACOS_SIGNED: ${{ needs.macos.outputs.signed }}
+      MACOS_NOTARIZED: ${{ needs.macos.outputs.notarized }}
+      IOS_SIGNED: ${{ needs.ios.outputs.signed }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.meta.outputs.ref }}
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: "{macos,ios}"
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        run: |
+          cd dist
+          LC_ALL=C sha256sum Ivynote-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+          notes_parts=()
+          if [[ "$MACOS_NOTARIZED" == "true" ]]; then
+            notes_parts+=("macOS 安装包已签名并通过 Apple 公证。")
+          elif [[ "$MACOS_SIGNED" == "true" ]]; then
+            notes_parts+=("macOS 安装包已签名但暂未公证，如系统提示无法验证开发者，请在「系统设置 → 隐私与安全性」中允许打开。")
+          else
+            notes_parts+=("macOS 安装包暂未签名公证，如首次打开提示“已损坏”或无法验证开发者，可运行 \`xattr -cr /Applications/Ivynote.app\` 后打开。")
+          fi
+
+          if [[ "$IOS_SIGNED" != "true" ]]; then
+            notes_parts+=("iOS IPA 为未签名版本，请使用 AltStore / SideStore / Sideloadly / TrollStore 重签或侧载安装。")
+          fi
+
+          SIGNING_NOTE=$(printf '%s ' "${notes_parts[@]}")
+          SIGNING_NOTE=${SIGNING_NOTE% }
+
+          python3 - "$VERSION" "$SIGNING_NOTE" ../packaging/release-notes.md ../notes.md <<'PY'
+          import sys
+          version, signing_note, src, dst = sys.argv[1:5]
+          text = open(src, encoding="utf-8").read()
+          text = text.replace("@VERSION@", version).replace("@SIGNING_NOTE@", signing_note)
+          open(dst, "w", encoding="utf-8").write(text)
+          PY
+
+          flags=()
+          [[ "$PRERELEASE" == "true" ]] && flags+=(--prerelease)
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            # Re-run of the workflow: refresh the files, keep the notes.
+            gh release upload "$TAG" * --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            # --generate-notes appends the PRs merged since the previous tag.
+            gh release create "$TAG" * \
+              --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Ivynote $VERSION" --notes-file ../notes.md --generate-notes "${flags[@]}"
+          fi
+
+      # Tell the websites to pull this release immediately instead of waiting for
+      # their next poll (within 10 minutes). Skipped when SITE_ADMIN_TOKEN is unset.
+      - name: Refresh the websites
+        env:
+          TOKEN: ${{ secrets.SITE_ADMIN_TOKEN }}
+        run: |
+          [ -n "$TOKEN" ] || { echo "SITE_ADMIN_TOKEN not set; the sites refresh on their own"; exit 0; }
+          for site in https://ivynote.net https://ivynote.app; do
+            curl -fsS -m 30 --retry 3 -X POST -H "Authorization: Bearer $TOKEN" "$site/api/admin/releases/refresh" \
+              && echo "refreshed $site" || echo "::warning::could not refresh $site"
+          done

@@ -5,6 +5,7 @@
 
 # Build output
 build/
+dist/
 DerivedData/
 .build/
 IvynoteKit/.swiftpm/

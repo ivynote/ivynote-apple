@@ -29,7 +29,7 @@ jobs:
   test:
     name: IvynoteKit tests & checks
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
@@ -85,7 +85,7 @@ jobs:
   build-macos:
     name: Build macOS
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -111,7 +111,6 @@ jobs:
             -derivedDataPath build/macos-debug \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="-" \
-            "CODE_SIGN_IDENTITY[sdk=macosx*]=-" \
             DEVELOPMENT_TEAM="" \
             build
 
@@ -133,7 +132,6 @@ jobs:
             ONLY_ACTIVE_ARCH=NO \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="-" \
-            "CODE_SIGN_IDENTITY[sdk=macosx*]=-" \
             DEVELOPMENT_TEAM=""
 
           APP="build/Ivynote-macos.xcarchive/Products/Applications/Ivynote.app"
@@ -146,7 +144,7 @@ jobs:
   build-ios:
     name: Build iOS
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -172,7 +170,6 @@ jobs:
             -derivedDataPath build/ios-sim \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="-" \
-            "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]=-" \
             DEVELOPMENT_TEAM="" \
             build
 
@@ -189,7 +186,6 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="" \
-            "CODE_SIGN_IDENTITY[sdk=iphoneos*]=" \
             DEVELOPMENT_TEAM=""
 
           mkdir -p build/ipa/Payload dist

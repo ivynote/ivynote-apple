@@ -115,7 +115,7 @@ jobs:
   test:
     name: Test IvynoteKit
     needs: meta
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
@@ -154,7 +154,7 @@ jobs:
   macos:
     name: macOS (Universal DMG)
     needs: meta
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
     outputs:
       signed: ${{ steps.sign.outputs.signed }}
@@ -240,7 +240,6 @@ jobs:
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="$SIGN_IDENTITY" \
-            "CODE_SIGN_IDENTITY[sdk=macosx*]=$SIGN_IDENTITY" \
             DEVELOPMENT_TEAM="$SIGN_TEAM_ID" \
             "${extra_args[@]}"
 
@@ -303,7 +302,7 @@ jobs:
   ios:
     name: iOS (IPA)
     needs: meta
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
     outputs:
       signed: ${{ steps.sign.outputs.signed }}
@@ -405,7 +404,6 @@ jobs:
               CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
               CODE_SIGN_STYLE=Manual \
               CODE_SIGN_IDENTITY="$SIGN_IDENTITY" \
-              "CODE_SIGN_IDENTITY[sdk=iphoneos*]=$SIGN_IDENTITY" \
               DEVELOPMENT_TEAM="$SIGN_TEAM_ID" \
               PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME"
 
@@ -450,7 +448,6 @@ jobs:
               CODE_SIGNING_REQUIRED=NO \
               CODE_SIGN_STYLE=Manual \
               CODE_SIGN_IDENTITY="" \
-              "CODE_SIGN_IDENTITY[sdk=iphoneos*]=" \
               DEVELOPMENT_TEAM=""
 
             mkdir -p build/ipa/Payload

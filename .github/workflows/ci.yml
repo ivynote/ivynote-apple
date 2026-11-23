@@ -1,0 +1,201 @@
+# Continuous integration for Ivynote Apple (macOS + iOS).
+#
+# - Pull requests run IvynoteKit unit tests, static asset checks, macOS Debug,
+#   and iOS Simulator Debug builds (draft PRs wait until ready for review).
+# - Pushes to dev, release, release/**, main (and manual runs) additionally run
+#   full Release Universal macOS (.dmg) and iOS Device (.ipa) packaging checks
+#   so release branches are verified before tagging vX.Y.Z.
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+      - release
+      - "release/**"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: IvynoteKit tests & checks
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Toolchain info
+        run: |
+          xcode-select -p
+          xcodebuild -version
+          swift --version
+
+      - name: Static checks (editor assets, plist, scripts)
+        run: |
+          for f in App/Editor/index.html App/Editor/main.js App/Editor/editor.css; do
+            test -s "$f" || { echo "::error::Missing or empty $f"; exit 1; }
+          done
+          test -d App/Editor/chunks || { echo "::error::Missing App/Editor/chunks"; exit 1; }
+
+          grep -q 'CFBundleShortVersionString: \$(MARKETING_VERSION)' project.yml
+          grep -q 'CFBundleVersion: \$(CURRENT_PROJECT_VERSION)' project.yml
+          grep -q '\$(MARKETING_VERSION)' App/Info.plist
+          grep -q '\$(CURRENT_PROJECT_VERSION)' App/Info.plist
+
+          for s in packaging/*.sh; do
+            bash -n "$s"
+          done
+
+      - name: Prepare test keychain
+        run: |
+          KC="$RUNNER_TEMP/ci-tests.keychain-db"
+          security create-keychain -p ci-test "$KC"
+          security set-keychain-settings "$KC"
+          security unlock-keychain -p ci-test "$KC"
+          if [ -f "$HOME/Library/Keychains/login.keychain-db" ]; then
+            security list-keychains -d user -s "$KC" "$HOME/Library/Keychains/login.keychain-db"
+          else
+            security list-keychains -d user -s "$KC"
+          fi
+          security default-keychain -s "$KC"
+          echo "CI_TEST_KEYCHAIN=$KC" >> "$GITHUB_ENV"
+
+      - name: Run IvynoteKit unit tests
+        working-directory: IvynoteKit
+        run: swift test
+
+      - name: Verify IvynoteKit release build
+        working-directory: IvynoteKit
+        run: swift build -c release
+
+      - name: Clean up test keychain
+        if: always() && env.CI_TEST_KEYCHAIN != ''
+        run: security delete-keychain "$CI_TEST_KEYCHAIN" || true
+
+  build-macos:
+    name: Build macOS
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen || brew install xcodegen
+          xcodegen --version
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build macOS (Debug)
+        run: |
+          xcodebuild \
+            -project Ivynote.xcodeproj \
+            -scheme Ivynote \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath build/macos-debug \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="-" \
+            "CODE_SIGN_IDENTITY[sdk=macosx*]=-" \
+            DEVELOPMENT_TEAM="" \
+            build
+
+      - name: Verify macOS Debug bundle
+        run: |
+          bash packaging/verify-bundle.sh \
+            --macos build/macos-debug/Build/Products/Debug/Ivynote.app
+
+      - name: Archive & verify macOS Release (Universal DMG)
+        if: github.event_name != 'pull_request'
+        run: |
+          xcodebuild archive \
+            -project Ivynote.xcodeproj \
+            -scheme Ivynote \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -archivePath build/Ivynote-macos.xcarchive \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="-" \
+            "CODE_SIGN_IDENTITY[sdk=macosx*]=-" \
+            DEVELOPMENT_TEAM=""
+
+          APP="build/Ivynote-macos.xcarchive/Products/Applications/Ivynote.app"
+          bash packaging/create-dmg.sh "$APP" "dist/Ivynote-ci-macos-universal.dmg"
+          bash packaging/verify-bundle.sh \
+            --macos "$APP" \
+            --universal \
+            --dmg "dist/Ivynote-ci-macos-universal.dmg"
+
+  build-ios:
+    name: Build iOS
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen || brew install xcodegen
+          xcodegen --version
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build iOS Simulator (Debug)
+        run: |
+          xcodebuild \
+            -project Ivynote.xcodeproj \
+            -scheme Ivynote \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/ios-sim \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="-" \
+            "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]=-" \
+            DEVELOPMENT_TEAM="" \
+            build
+
+      - name: Archive & verify iOS Device (Release unsigned IPA)
+        if: github.event_name != 'pull_request'
+        run: |
+          xcodebuild archive \
+            -project Ivynote.xcodeproj \
+            -scheme Ivynote \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/Ivynote-ios.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="" \
+            "CODE_SIGN_IDENTITY[sdk=iphoneos*]=" \
+            DEVELOPMENT_TEAM=""
+
+          mkdir -p build/ipa/Payload dist
+          ditto "build/Ivynote-ios.xcarchive/Products/Applications/Ivynote.app" "build/ipa/Payload/Ivynote.app"
+          (cd build/ipa && zip -qry ../../dist/Ivynote-ci-ios.ipa Payload)
+
+          bash packaging/verify-bundle.sh \
+            --ios dist/Ivynote-ci-ios.ipa \
+            --signed false

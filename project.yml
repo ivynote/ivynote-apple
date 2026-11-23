@@ -36,6 +36,8 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: 常青笔记
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         # Chinese first, English second (guide 3.5); dates and system
         # strings follow the device language among these.
         CFBundleDevelopmentRegion: zh-Hans

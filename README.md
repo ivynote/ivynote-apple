@@ -109,6 +109,20 @@ xcrun simctl launch booted app.ivynote -ivyOpenNote "Some title"
   clears it; offline it is kept and sent later). Sign-up sends the language
   in use. Dates follow the interface language (`LanguageSettings`).
 
+## CI & Releases
+
+- **Branch / PR CI** (`.github/workflows/ci.yml`):
+  - Pull requests and pushes to `main`, `dev`, `release`, and `release/**` run `IvynoteKit` unit tests, editor asset checks, macOS Debug, and iOS Simulator Debug builds.
+  - Pushes to `main`, `dev`, `release`, and `release/**` additionally archive and verify the Universal macOS `.dmg` and unsigned iOS Device `.ipa`.
+- **Tag Release** (`.github/workflows/release.yml`):
+  - Push a `vX.Y.Z` tag (e.g. `git tag v0.2.0 && git push origin v0.2.0`). Tags with a suffix (`v0.2.0-beta.1`) are published as pre-releases.
+  - Runs `IvynoteKit` tests in parallel with Universal macOS (`arm64` + `x86_64`) `.dmg` and iOS `.ipa` builds; publishes the GitHub Release (with `SHA256SUMS.txt` and auto-grouped changelog via `.github/release.yml`) only after every check succeeds.
+  - Works out of the box without signing secrets (ad-hoc macOS `.dmg` + unsigned iOS `.ipa`). Configure optional repository secrets to enable Developer ID signing/notarization and signed iOS export:
+    - macOS signing: `APPLE_TEAM_ID`, `MACOS_SIGN_P12_BASE64`, `MACOS_SIGN_P12_PASSWORD`
+    - macOS notarization: `APPLE_NOTARY_KEY_BASE64`, `APPLE_NOTARY_KEY_ID`, `APPLE_NOTARY_ISSUER_ID`
+    - iOS signing: `APPLE_TEAM_ID`, `IOS_SIGN_P12_BASE64`, `IOS_SIGN_P12_PASSWORD`, `IOS_PROVISION_PROFILE_BASE64` (and optional variable `IOS_EXPORT_METHOD`, default `release-testing`)
+    - Website refresh: `SITE_ADMIN_TOKEN`
+
 ## Roadmap
 
 1. ~~Connect, sign in, sign up, session restore~~
